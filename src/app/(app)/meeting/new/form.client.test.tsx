@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { renderWithOnboarding } from '@/test/onboarding';
 
@@ -36,17 +36,17 @@ vi.mock('@/lib/storage', () => ({
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
 }));
 
-// Mock @/lib/pending-upload — takePendingUploadFile returns null by default
-const mockTakePendingUploadFile = vi.fn<() => File | null>().mockReturnValue(null);
+// Mock @/lib/pending-upload — takePendingUploadFiles returns no files by default
+const mockTakePendingUploadFiles = vi.fn<() => File[]>().mockReturnValue([]);
 vi.mock('@/lib/pending-upload', () => ({
-  takePendingUploadFile: () => mockTakePendingUploadFile(),
+  takePendingUploadFiles: () => mockTakePendingUploadFiles(),
 }));
 
-// Mock UploadConfirmScreen so we can assert it receives the file prop
+// Mock UploadConfirmScreen so we can assert it receives the files prop
 vi.mock('./upload-confirm.client', () => ({
-  UploadConfirmScreen: ({ file, onCancel }: { file: File; onCancel: () => void }) => (
+  UploadConfirmScreen: ({ files, onCancel }: { files: File[]; onCancel: () => void }) => (
     <div data-testid="upload-confirm-screen">
-      <span data-testid="upload-confirm-filename">{file.name}</span>
+      <span data-testid="upload-confirm-filename">{files.map((f) => f.name).join(',')}</span>
       <button type="button" onClick={onCancel}>
         cancel-upload
       </button>
@@ -68,7 +68,14 @@ function renderPage() {
 beforeEach(() => {
   mockPush.mockReset();
   mockCreateMeeting.mockReset();
-  mockTakePendingUploadFile.mockReturnValue(null);
+  mockTakePendingUploadFiles.mockReturnValue([]);
+  // The ordering step reads each file's length through an Audio element.
+  vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() });
+  vi.stubGlobal('Audio', vi.fn().mockImplementation(function () { return {}; }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -438,10 +445,10 @@ describe('NewMeetingPage — Participants parsing', () => {
 // Upload mode — renders UploadConfirmScreen when a pending file is present
 // ---------------------------------------------------------------------------
 
-describe('NewMeetingPage — UploadConfirmScreen via takePendingUploadFile', () => {
+describe('NewMeetingPage — UploadConfirmScreen via takePendingUploadFiles', () => {
   it('renders UploadConfirmScreen instead of the form when a pending file exists', () => {
     const fakeFile = new File(['hello'], 'meeting.mp3', { type: 'audio/mpeg' });
-    mockTakePendingUploadFile.mockReturnValue(fakeFile);
+    mockTakePendingUploadFiles.mockReturnValue([fakeFile]);
 
     renderPage();
     expect(screen.getByTestId('upload-confirm-screen')).toBeInTheDocument();
@@ -450,7 +457,7 @@ describe('NewMeetingPage — UploadConfirmScreen via takePendingUploadFile', () 
 
   it('passes the pending file to UploadConfirmScreen', () => {
     const fakeFile = new File(['data'], 'audio.wav', { type: 'audio/wav' });
-    mockTakePendingUploadFile.mockReturnValue(fakeFile);
+    mockTakePendingUploadFiles.mockReturnValue([fakeFile]);
 
     renderPage();
     expect(screen.getByTestId('upload-confirm-filename')).toHaveTextContent('audio.wav');
@@ -458,16 +465,16 @@ describe('NewMeetingPage — UploadConfirmScreen via takePendingUploadFile', () 
 
   it('navigates to /dashboard when UploadConfirmScreen onCancel is called', () => {
     const fakeFile = new File(['x'], 'clip.m4a', { type: 'audio/m4a' });
-    mockTakePendingUploadFile.mockReturnValue(fakeFile);
+    mockTakePendingUploadFiles.mockReturnValue([fakeFile]);
 
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'cancel-upload' }));
     expect(mockPush).toHaveBeenCalledWith('/dashboard');
   });
 
-  it('returns to the form after onCancel is called (uploadFile set to null)', () => {
+  it('returns to the form after onCancel is called (upload files cleared)', () => {
     const fakeFile = new File(['y'], 'sound.webm', { type: 'audio/webm' });
-    mockTakePendingUploadFile.mockReturnValue(fakeFile);
+    mockTakePendingUploadFiles.mockReturnValue([fakeFile]);
 
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'cancel-upload' }));
@@ -507,6 +514,60 @@ describe('NewMeetingPage — file picker in upload mode', () => {
     await waitFor(() => {
       expect(screen.getByTestId('upload-confirm-filename')).toHaveTextContent('track.wav');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Several files — the ordering step comes before transcription
+// ---------------------------------------------------------------------------
+
+describe('NewMeetingPage — several files', () => {
+  const abc = () => ['a.mp3', 'b.mp3', 'c.mp3'].map((n) => new File(['x'], n, { type: 'audio/mpeg' }));
+
+  it('shows the ordering step, not the transcription, for three files from the dashboard', () => {
+    mockTakePendingUploadFiles.mockReturnValue(abc());
+    renderPage();
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    expect(screen.queryByTestId('upload-confirm-screen')).toBeNull();
+  });
+
+  it('transcribes the files in the order the user chose', () => {
+    mockTakePendingUploadFiles.mockReturnValue(abc());
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Flyt c.mp3 op' }));
+    fireEvent.click(screen.getByRole('button', { name: /saml og transskribér/ }));
+
+    expect(screen.getByTestId('upload-confirm-filename')).toHaveTextContent('a.mp3,c.mp3,b.mp3');
+  });
+
+  it('shows the ordering step for several files picked in the form', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Upload lydfil/ }));
+    const fileInput = screen.getByLabelText('Lydfil');
+    expect(fileInput).toHaveAttribute('multiple');
+
+    fireEvent.change(fileInput, { target: { files: abc() } });
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+  });
+
+  it('goes back to the dashboard when the ordering step is cancelled', () => {
+    mockTakePendingUploadFiles.mockReturnValue(abc());
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /annullér/ }));
+
+    expect(mockPush).toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('skips the ordering step for a single file', () => {
+    mockTakePendingUploadFiles.mockReturnValue([new File(['x'], 'solo.mp3')]);
+    renderPage();
+
+    expect(screen.queryByRole('listitem')).toBeNull();
+    expect(screen.getByTestId('upload-confirm-filename')).toHaveTextContent('solo.mp3');
   });
 });
 

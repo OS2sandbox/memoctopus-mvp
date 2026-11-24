@@ -22,16 +22,42 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function baseName(file: File): string {
+  return file.name.replace(/\.[^.]+$/, '');
+}
+
+/**
+ * Joins several recordings of one meeting, in the order given, into one FLAC on
+ * the server, so the rest of the upload pipeline (and its single diarization
+ * pass) sees one recording.
+ */
+async function joinInOrder(files: File[]): Promise<File> {
+  const form = new FormData();
+  for (const f of files) form.append('audio', f);
+  const res = await fetch('/api/audio/concat', { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`POST /api/audio/concat answered ${res.status}`);
+  const blob = await res.blob();
+  return new File([blob], `${baseName(files[0])}.flac`, {
+    type: 'audio/flac',
+    lastModified: files[0].lastModified,
+  });
+}
+
 interface Props {
-  file: File;
+  /** One recording, or several parts of one meeting in the order to join them. */
+  files: File[];
   onCancel: () => void;
 }
 
-type Phase = 'init' | 'analyzing' | 'transcribing' | 'saving' | 'done' | 'error';
+type Phase = 'init' | 'joining' | 'analyzing' | 'transcribing' | 'saving' | 'done' | 'error';
 
-export function UploadConfirmScreen({ file, onCancel }: Props) {
+export function UploadConfirmScreen({ files, onCancel }: Props) {
   const router = useRouter();
-  const [phase, setPhase] = useState<Phase>('init');
+  const several = files.length > 1;
+  // The recording the pipeline runs on: the one file, or the joined file once the
+  // server has returned it.
+  const [file, setFile] = useState<File | null>(several ? null : files[0]);
+  const [phase, setPhase] = useState<Phase>(several ? 'joining' : 'init');
   const [audioDuration, setAudioDuration] = useState(0);
   const [completedSeconds, setCompletedSeconds] = useState(0);
   const [totalSeconds, setTotalSeconds] = useState(0);
@@ -55,6 +81,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
   // Guard against double-revocation: React StrictMode runs effects twice in dev,
   // which can revoke the blob URL before the Audio element loads it → ERR_FILE_NOT_FOUND.
   useEffect(() => {
+    if (!file) return;
     const url = URL.createObjectURL(file);
     const audio = new Audio();
     let revoked = false;
@@ -78,10 +105,23 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
     async function run() {
       try {
+        let file = files[0];
+        if (several) {
+          try {
+            file = await joinInOrder(files);
+          } catch (err) {
+            console.error('[upload-confirm] joining the files failed:', err);
+            throw new Error('Lydfilerne kunne ikke samles. Prøv igen, eller upload filerne én ad gangen.');
+          }
+          if (!liveRef.current) return;
+          setFile(file);
+        }
+
         const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
         // Use the uploaded file's own date as the recording date — uploading an
-        // old clip should keep the clip's date, not today's. Falls back to now
-        // when the browser reports no usable lastModified (0).
+        // old clip should keep the clip's date, not today's (a joined file carries
+        // the first part's date). Falls back to now when the browser reports no
+        // usable lastModified (0).
         const recordedAt = file.lastModified
           ? new Date(file.lastModified).toISOString()
           : undefined;
@@ -198,10 +238,16 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     ? Math.max(0, Math.round((totalSeconds - completedSeconds) / 16))
     : 0;
 
-  const fileExt = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const fileExts = [...new Set(files.map((f) => f.name.split('.').pop()?.toLowerCase() ?? ''))].join(' · ');
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+  const fileNames = files.map((f) => f.name).join(', ');
+  const deleteReminder = several
+    ? 'husk at slette de originale lydfiler på din enhed'
+    : 'husk at slette den originale lydfil på din enhed';
 
   const progressLabels: Record<Phase, string> = {
     init: 'forbereder…',
+    joining: 'samler lydfilerne…',
     analyzing: 'analyserer tale…',
     transcribing: 'transskriberer med hviske',
     saving: 'gemmer transskription…',
@@ -226,7 +272,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
   async function handleContinue() {
     const id = meetingIdRef.current;
     if (!done || !id) return;
-    const finalTitle = title.trim() || file.name.replace(/\.[^.]+$/, '');
+    const finalTitle = title.trim() || baseName(files[0]);
     try {
       await updateMeeting(id, { title: finalTitle, participants });
     } catch (err) {
@@ -286,7 +332,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
             marginTop: 40, paddingTop: 22, borderTop: '1px solid var(--line)',
             fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
           }}>
-            fil: {file.name} ({formatBytes(file.size)})
+            {several ? 'filer' : 'fil'}: {fileNames} ({formatBytes(totalBytes)})
           </div>
         </div>
       </div>
@@ -310,7 +356,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 24 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>
-              lydfil uploadet · klar til transskription
+              {several ? 'lydfiler uploadet' : 'lydfil uploadet'} · klar til transskription
             </div>
             <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{
@@ -324,18 +370,25 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
                   ))}
                 </span>
               </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 17, color: 'var(--ink)' }}>{file.name}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 17, color: 'var(--ink)' }}>
+                {several ? `${files.length} lydfiler` : files[0].name}
+              </span>
             </div>
             <div style={{
               marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
               letterSpacing: 0.2, display: 'flex', gap: 14,
             }}>
-              <span>{formatBytes(file.size)}</span>
+              <span>{formatBytes(totalBytes)}</span>
               <span style={{ color: 'var(--muted-2)' }}>·</span>
               <span>{audioDuration > 0 ? fmtMS(audioDuration) : '…'}</span>
               <span style={{ color: 'var(--muted-2)' }}>·</span>
-              <span>{fileExt}</span>
+              <span>{fileExts}</span>
             </div>
+            {several && (
+              <div style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', letterSpacing: 0.2 }}>
+                samles i rækkefølgen {fileNames}
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -486,9 +539,12 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
                 § databehandling
               </div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.8, letterSpacing: 0.2 }}>
-                filen behandles lokalt på din enhed<br />
-                slettes automatisk når du genererer dit referat<br />
+                serveren transskriberer lyden og gemmer den ikke<br />
+                kopien i browseren slettes, når du genererer referatet<br />
                 personoplysninger fjernes inden referat
+              </div>
+              <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)', lineHeight: 1.8, letterSpacing: 0.2 }}>
+                {deleteReminder}
               </div>
             </div>
           </div>
@@ -515,9 +571,9 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
               live-kig · ord lander mens den arbejder
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: '12px 0' }}>
-              {(phase === 'init' || phase === 'analyzing') && (
+              {(phase === 'init' || phase === 'joining' || phase === 'analyzing') && (
                 <div style={{ padding: '24px 16px', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-                  {phase === 'analyzing' ? 'analyserer tale…' : 'indlæser lyd…'}
+                  {phase === 'init' ? 'indlæser lyd…' : progressLabels[phase]}
                 </div>
               )}
               {phase === 'transcribing' && liveSegments.length === 0 && (
@@ -575,12 +631,13 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
           marginTop: 36, paddingTop: 22, borderTop: '1px solid var(--line)',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.7 }}>
             {done
               ? archiveFailedRef.current
                 ? 'advarsel: lydfilen kunne ikke arkiveres på serveren — transskriptionen er klar.'
                 : 'transskriptionen er klar — gennemgå og ryd op i referatet.'
               : 'du kan navngive møde og deltagere nu — vi fortsætter automatisk når den er færdig.'}
+            {done && <><br /><span style={{ color: 'var(--ink-2)' }}>{deleteReminder}</span></>}
           </span>
           <button
             type="button"

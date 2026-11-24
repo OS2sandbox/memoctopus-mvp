@@ -9,8 +9,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { createMeeting } from '@/lib/storage';
-import { takePendingUploadFile } from '@/lib/pending-upload';
+import { takePendingUploadFiles } from '@/lib/pending-upload';
 import { UploadConfirmScreen } from './upload-confirm.client';
+import { UploadOrderList } from '@/components/upload/UploadOrderList';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 const schema = z.object({
@@ -31,8 +32,10 @@ export default function NewMeetingPage() {
   const [uploadMode, setUploadMode] = useState<'record' | 'upload'>('record');
   const [error, setError] = useState<string | null>(null);
 
-  // Check for a file passed from the dashboard "upload lydfil" picker.
-  const [uploadFile, setUploadFile] = useState<File | null>(() => takePendingUploadFile());
+  // Files passed from the dashboard "upload lydfil" picker. Several files are one
+  // meeting recorded in parts: the user puts them in order before transcription.
+  const [uploadFiles, setUploadFiles] = useState<File[]>(() => takePendingUploadFiles());
+  const [ordering, setOrdering] = useState(() => uploadFiles.length > 1);
 
   // useForm must be called unconditionally (Rules of Hooks) even when we render
   // UploadConfirmScreen instead of this form.
@@ -42,16 +45,29 @@ export default function NewMeetingPage() {
     formState: { errors },
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
-  if (uploadFile) {
+  function pickFiles(files: File[]) {
+    setUploadFiles(files);
+    setOrdering(files.length > 1);
+  }
+
+  function cancelUpload() {
+    pickFiles([]);
+    router.push('/dashboard');
+  }
+
+  if (ordering) {
     return (
-      <UploadConfirmScreen
-        file={uploadFile}
-        onCancel={() => {
-          setUploadFile(null);
-          router.push('/dashboard');
-        }}
+      <UploadOrderList
+        files={uploadFiles}
+        onChange={setUploadFiles}
+        onConfirm={() => setOrdering(false)}
+        onCancel={cancelUpload}
       />
     );
+  }
+
+  if (uploadFiles.length > 0) {
+    return <UploadConfirmScreen files={uploadFiles} onCancel={cancelUpload} />;
   }
 
   async function onSubmit(data: FormData) {
@@ -65,7 +81,7 @@ export default function NewMeetingPage() {
             .filter(Boolean)
         : [];
 
-      // The upload path is handled by UploadConfirmScreen (rendered when a file is
+      // The upload path is handled by UploadConfirmScreen (rendered when files are
       // chosen). This submit handler only covers the "record now" path.
       const meeting = await createMeeting({
         title: data.title,
@@ -156,17 +172,18 @@ export default function NewMeetingPage() {
               id="audioFile"
               type="file"
               accept="audio/*"
+              multiple
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  setUploadFile(f);
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) {
+                  pickFiles(files);
                   e.currentTarget.value = '';
                 }
               }}
               className="block w-full text-sm text-[var(--ink-2)] file:mr-3 file:py-2 file:px-3 file:rounded-[var(--radius)] file:border file:border-[var(--line)] file:bg-[var(--surface-2)] file:text-sm file:font-medium file:text-[var(--ink)] hover:file:bg-[var(--line)] file:cursor-pointer cursor-pointer"
             />
             <p className="text-xs text-[var(--muted)]">
-              Vælg en lydfil fra din computer.
+              Vælg én eller flere lydfiler fra din computer. Flere filer samles til én optagelse.
             </p>
           </div>
         )}

@@ -49,7 +49,7 @@ vi.mock('@/lib/storage', () => ({
 
 // Mock @/lib/pending-upload (used transitively)
 vi.mock('@/lib/pending-upload', () => ({
-  setPendingUploadFile: vi.fn(),
+  setPendingUploadFiles: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------

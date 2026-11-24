@@ -84,7 +84,7 @@ const DEFAULT_MEETING = { id: 'meeting-abc' };
 async function renderAndWaitForDone(file: File) {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<UploadConfirmScreen file={file} onCancel={vi.fn()} />);
+    result = render(<UploadConfirmScreen files={[file]} onCancel={vi.fn()} />);
   });
   return result!;
 }
@@ -193,7 +193,7 @@ describe('UploadConfirmScreen — initial rendering', () => {
     // Use a never-resolving transcription so we stay in processing
     mockTranscribeBatchesOnServer.mockReturnValue(new Promise(() => {}));
     const file = makeFile('test.mp3', 1024);
-    render(<UploadConfirmScreen file={file} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[file]} onCancel={vi.fn()} />);
     // Wait for the component to start running
     await waitFor(() => {
       const btn = screen.getByRole('button', { name: /afventer transskription/i });
@@ -341,7 +341,7 @@ describe('UploadConfirmScreen — diarization lifecycle', () => {
       return Promise.resolve([]);
     });
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={vi.fn()} />);
 
     // startDiarization should be called before transcription resolves
     await waitFor(() => expect(callOrder).toContain('startDiarization'));
@@ -420,7 +420,7 @@ describe('UploadConfirmScreen — cancel behaviour', () => {
   it('calls onCancel when the cancel button is clicked', async () => {
     const onCancel = vi.fn();
     const file = makeFile('audio.mp3', 1024);
-    render(<UploadConfirmScreen file={file} onCancel={onCancel} />);
+    render(<UploadConfirmScreen files={[file]} onCancel={onCancel} />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /annullér/i }));
@@ -438,7 +438,7 @@ describe('UploadConfirmScreen — cancel behaviour', () => {
       new Promise((r) => { resolveTranscribe = r; }),
     );
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={onCancel} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={onCancel} />);
 
     // Wait for meeting to be created
     await waitFor(() => expect(mockCreateMeeting).toHaveBeenCalledTimes(1));
@@ -460,7 +460,7 @@ describe('UploadConfirmScreen — cancel behaviour', () => {
     mockCreateMeeting.mockReturnValueOnce(new Promise((r) => { resolveCreate = r; }));
     const onCancel = vi.fn();
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={onCancel} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={onCancel} />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /annullér/i }));
@@ -476,7 +476,7 @@ describe('UploadConfirmScreen — cancel behaviour', () => {
   it('does not navigate to review when cancel is clicked', async () => {
     const onCancel = vi.fn();
     mockTranscribeBatchesOnServer.mockReturnValue(new Promise(() => {}));
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={onCancel} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={onCancel} />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /annullér/i }));
@@ -490,7 +490,7 @@ describe('UploadConfirmScreen — cancel behaviour', () => {
     const onCancel = vi.fn();
     const file = makeFile('audio.mp3', 1024);
 
-    render(<UploadConfirmScreen file={file} onCancel={onCancel} />);
+    render(<UploadConfirmScreen files={[file]} onCancel={onCancel} />);
     await waitFor(() => screen.getByText(/transskription fejlede/i));
 
     await act(async () => {
@@ -581,14 +581,14 @@ describe('UploadConfirmScreen — progress labels', () => {
   it('shows "forbereder…" label initially', () => {
     mockTranscribeBatchesOnServer.mockReturnValue(new Promise(() => {}));
     const file = makeFile('audio.mp3', 1024);
-    render(<UploadConfirmScreen file={file} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[file]} onCancel={vi.fn()} />);
     expect(screen.getByText('forbereder…')).toBeInTheDocument();
   });
 
   it('shows 0% progress initially', () => {
     mockTranscribeBatchesOnServer.mockReturnValue(new Promise(() => {}));
     const file = makeFile('audio.mp3', 1024);
-    render(<UploadConfirmScreen file={file} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[file]} onCancel={vi.fn()} />);
     // The large number "0" followed by "%" in a span
     expect(screen.getByText('0')).toBeInTheDocument();
   });
@@ -653,7 +653,7 @@ describe('UploadConfirmScreen — live segment rendering', () => {
   it('renders live segments as they arrive via onBatch', async () => {
     const ctrl = makeControlledTranscribeMock();
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={vi.fn()} />);
 
     // Wait for the analyzing phase (createMeeting done, transcription started)
     await waitFor(() => expect(mockTranscribeBatchesOnServer).toHaveBeenCalled());
@@ -673,7 +673,7 @@ describe('UploadConfirmScreen — live segment rendering', () => {
   it('shows "indlæser lyd…" in live view during init phase', () => {
     mockTranscribeBatchesOnServer.mockReturnValue(new Promise(() => {}));
     const file = makeFile('audio.mp3', 1024);
-    render(<UploadConfirmScreen file={file} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[file]} onCancel={vi.fn()} />);
     expect(screen.getByText('indlæser lyd…')).toBeInTheDocument();
   });
 
@@ -682,7 +682,7 @@ describe('UploadConfirmScreen — live segment rendering', () => {
       { start: 0, end: 5, text: 'Default speaker text', speaker: 'Taler 1', confidence: 0.9 },
     ]);
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={vi.fn()} />);
     await waitFor(() => expect(mockTranscribeBatchesOnServer).toHaveBeenCalled());
 
     await act(async () => {
@@ -703,7 +703,7 @@ describe('UploadConfirmScreen — live segment rendering', () => {
       { start: 0, end: 5, text: 'Named speaker text', speaker: 'Alice', confidence: 0.9 },
     ]);
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={vi.fn()} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={vi.fn()} />);
     await waitFor(() => expect(mockTranscribeBatchesOnServer).toHaveBeenCalled());
 
     await act(async () => {
@@ -796,7 +796,7 @@ describe('UploadConfirmScreen — error logging (traceability)', () => {
       new Promise((r) => { resolveTranscribe = r; }),
     );
 
-    render(<UploadConfirmScreen file={makeFile('audio.mp3', 1024)} onCancel={onCancel} />);
+    render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={onCancel} />);
     await waitFor(() => expect(mockCreateMeeting).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -841,5 +841,103 @@ describe('UploadConfirmScreen — error logging (traceability)', () => {
     // Navigation still happens despite the error
     expect(mockPush).toHaveBeenCalledWith('/meeting/meeting-abc/review');
     consoleErrorSpy.mockRestore();
+  });
+});
+
+// ===========================================================================
+// 11. Several files — joined by /api/audio/concat, then the ordinary pipeline
+// ===========================================================================
+
+describe('UploadConfirmScreen — several files', () => {
+  const joined = new Blob(['joined audio'], { type: 'audio/flac' });
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: true, status: 200, blob: async () => joined });
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  const abc = () => [makeFile('c.mp3', 10), makeFile('a.mp3', 20), makeFile('b.mp3', 30)];
+
+  it('posts the files to /api/audio/concat in the order given', async () => {
+    await act(async () => {
+      render(<UploadConfirmScreen files={abc()} onCancel={vi.fn()} />);
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/audio/concat');
+    expect(init.method).toBe('POST');
+    const sent = (init.body as FormData).getAll('audio') as File[];
+    expect(sent.map((f) => f.name)).toEqual(['c.mp3', 'a.mp3', 'b.mp3']);
+  });
+
+  it('transcribes, diarizes and archives the joined file', async () => {
+    await act(async () => {
+      render(<UploadConfirmScreen files={abc()} onCancel={vi.fn()} />);
+    });
+
+    const transcribed = mockTranscribeBatchesOnServer.mock.calls[0][1] as File;
+    expect(transcribed.type).toBe('audio/flac');
+    expect(await transcribed.text()).toBe('joined audio');
+    expect(mockStartDiarization).toHaveBeenCalledWith('meeting-abc', transcribed);
+    expect(mockSaveAudio).toHaveBeenCalledWith('meeting-abc', transcribed, 'audio/flac');
+    expect(screen.getByText('transskription færdig')).toBeInTheDocument();
+  });
+
+  it('names the meeting after the first file when no title is typed', async () => {
+    await act(async () => {
+      render(<UploadConfirmScreen files={abc()} onCancel={vi.fn()} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /fortsæt til gennemgang/ }));
+    });
+
+    expect(mockUpdateMeeting).toHaveBeenCalledWith('meeting-abc', { title: 'c', participants: [] });
+  });
+
+  it('shows an error and creates no meeting when the files cannot be joined', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue({ ok: false, status: 500, blob: async () => new Blob() });
+    await act(async () => {
+      render(<UploadConfirmScreen files={abc()} onCancel={vi.fn()} />);
+    });
+
+    expect(screen.getByText(/lydfilerne kunne ikke samles/i)).toBeInTheDocument();
+    expect(mockCreateMeeting).not.toHaveBeenCalled();
+    expect(mockTranscribeBatchesOnServer).not.toHaveBeenCalled();
+  });
+
+  it('does not join a single file', async () => {
+    const file = makeFile('solo.mp3', 10);
+    await renderAndWaitForDone(file);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTranscribeBatchesOnServer.mock.calls[0][1]).toBe(file);
+  });
+});
+
+// ===========================================================================
+// 12. Data handling copy
+// ===========================================================================
+
+describe('UploadConfirmScreen — data handling copy', () => {
+  it('no longer claims the file is processed on the device', async () => {
+    await renderAndWaitForDone(makeFile('audio.mp3', 1024));
+    expect(screen.queryByText(/behandles lokalt/i)).toBeNull();
+  });
+
+  it('reminds the user to delete the audio locally while it works', async () => {
+    mockTranscribeBatchesOnServer.mockReturnValue(new Promise(() => {}));
+    await act(async () => {
+      render(<UploadConfirmScreen files={[makeFile('audio.mp3', 1024)]} onCancel={vi.fn()} />);
+    });
+    expect(screen.getAllByText(/husk at slette den originale lydfil på din enhed/i)).toHaveLength(1);
+  });
+
+  it('repeats the reminder when the transcription is done', async () => {
+    await renderAndWaitForDone(makeFile('audio.mp3', 1024));
+    expect(screen.getAllByText(/husk at slette den originale lydfil på din enhed/i)).toHaveLength(2);
   });
 });

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   pendingUpload,
-  setPendingUploadFile,
-  takePendingUploadFile,
+  setPendingUploadFiles,
+  takePendingUploadFiles,
   clearPendingUploads,
 } from './pending-upload';
 
@@ -81,13 +81,13 @@ describe('pendingUpload', () => {
 describe('clearPendingUploads', () => {
   beforeEach(() => clearPendingUploads());
 
-  it('drops a picked upload file so the next user cannot consume it', () => {
+  it('drops picked upload files so the next user cannot consume them', () => {
     const file = new File(['secret audio'], 'recording.webm', { type: 'audio/webm' });
-    setPendingUploadFile(file);
+    setPendingUploadFiles([file]);
 
     clearPendingUploads();
 
-    expect(takePendingUploadFile()).toBeNull();
+    expect(takePendingUploadFiles()).toEqual([]);
   });
 
   it('also clears the pending recording blob', () => {
@@ -96,5 +96,25 @@ describe('clearPendingUploads', () => {
     clearPendingUploads();
 
     expect(pendingUpload.get()).toBeNull();
+  });
+});
+
+// ─── picked upload files ───────────────────────────────────────────────────────
+
+describe('setPendingUploadFiles / takePendingUploadFiles', () => {
+  beforeEach(() => clearPendingUploads());
+
+  it('hands over every picked file, in the order picked', () => {
+    const files = ['a.mp3', 'b.mp3', 'c.mp3'].map((n) => new File(['x'], n));
+    setPendingUploadFiles(files);
+
+    expect(takePendingUploadFiles().map((f) => f.name)).toEqual(['a.mp3', 'b.mp3', 'c.mp3']);
+  });
+
+  it('hands the files over once', () => {
+    setPendingUploadFiles([new File(['x'], 'a.mp3')]);
+    takePendingUploadFiles();
+
+    expect(takePendingUploadFiles()).toEqual([]);
   });
 });

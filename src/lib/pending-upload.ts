@@ -19,19 +19,21 @@ export const pendingUpload = {
 };
 
 // ── Upload-confirm file store ──────────────────────────────────────────────────
-// Holds the File picked on the dashboard so it can be consumed by /meeting/new
-// without serialisation (File objects cannot be stored in sessionStorage).
+// Holds the files picked on the dashboard so /meeting/new can consume them
+// without serialisation (File objects cannot be stored in sessionStorage). Several
+// files are one meeting recorded in parts; their order is the order picked until
+// the user changes it on the ordering step.
 
-let _uploadFile: File | null = null;
+let _uploadFiles: File[] = [];
 
-export function setPendingUploadFile(f: File): void {
-  _uploadFile = f;
+export function setPendingUploadFiles(files: File[]): void {
+  _uploadFiles = files;
 }
 
-export function takePendingUploadFile(): File | null {
-  const f = _uploadFile;
-  _uploadFile = null;
-  return f;
+export function takePendingUploadFiles(): File[] {
+  const files = _uploadFiles;
+  _uploadFiles = [];
+  return files;
 }
 
 // Clear all in-memory pending data. Called on sign-out so a file/blob picked by one
@@ -39,5 +41,5 @@ export function takePendingUploadFile(): File | null {
 // reset these module singletons).
 export function clearPendingUploads(): void {
   _pending = null;
-  _uploadFile = null;
+  _uploadFiles = [];
 }
