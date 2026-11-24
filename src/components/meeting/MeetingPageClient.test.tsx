@@ -9,8 +9,9 @@ import type { StoredMeeting, StoredTranscript, StoredMinutes } from '@/lib/stora
 
 // ─── next/navigation ──────────────────────────────────────────────────────────
 const mockRouterPush = vi.fn();
+const mockRouterReplace = vi.fn();
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockRouterPush }),
+  useRouter: () => ({ push: mockRouterPush, replace: mockRouterReplace }),
 }));
 
 // ─── next/link ────────────────────────────────────────────────────────────────
@@ -77,8 +78,11 @@ vi.mock('@/components/transcript/TranscriptReview', () => ({
 }));
 
 vi.mock('@/components/minutes/MinutesEditor', () => ({
-  MinutesEditor: (props: { meetingId: string }) => (
-    <div data-testid="minutes-editor" data-meeting-id={props.meetingId}>MinutesEditor</div>
+  MinutesEditor: (props: { meetingId: string; onExport: () => void }) => (
+    <div data-testid="minutes-editor" data-meeting-id={props.meetingId}>
+      MinutesEditor
+      <button onClick={props.onExport}>Eksportér</button>
+    </div>
   ),
 }));
 
@@ -124,9 +128,14 @@ vi.mock('@/components/layout/ProcessStrip', () => ({
   ProcessStrip: (props: {
     meetingId: string;
     activePhase: string;
+    completedPhases?: string[];
     onTabChange?: (tab: string) => void;
   }) => (
-    <div data-testid="process-strip" data-active-phase={props.activePhase}>
+    <div
+      data-testid="process-strip"
+      data-active-phase={props.activePhase}
+      data-completed={(props.completedPhases ?? []).join(',')}
+    >
       {['recording', 'review', 'minutes', 'export'].map((phase) => (
         <button
           key={phase}
@@ -224,6 +233,30 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+// ─── Notes ─────────────────────────────────────────────────────────────────────
+
+describe('MeetingPageClient — a note', () => {
+  // A note is stored as a meeting, so its id also resolves here; it has its own screen.
+  it.each(['recording', 'review', 'minutes', 'export'])('forwards a note opened on the %s route to /note/{id}', async (tab) => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ kind: 'note', status: 'done' }));
+
+    renderClient({ initialTab: tab });
+
+    await waitFor(() => expect(mockRouterReplace).toHaveBeenCalledWith(`/note/${MEETING_ID}`));
+    expect(screen.queryByTestId('process-strip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('recording-screen')).not.toBeInTheDocument();
+  });
+
+  it('does not forward a meeting', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ kind: 'meeting' }));
+
+    renderClient({ initialTab: 'review' });
+
+    await waitFor(() => expect(screen.getByTestId('process-strip')).toBeInTheDocument());
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Loading state ─────────────────────────────────────────────────────────────
@@ -605,6 +638,19 @@ describe('MeetingPageClient — minutes tab', () => {
       expect(screen.getByTestId('process-strip')).toHaveAttribute('data-active-phase', 'review');
     });
   });
+  // Eksportér used to be a full page load to /export; it is a tab switch now.
+  it('switches to the export tab when MinutesEditor asks to export', async () => {
+    const user = userEvent.setup();
+    mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'minutes' }));
+    mockGetMinutes.mockResolvedValue(makeMinutes());
+
+    renderClient({ initialTab: 'minutes' });
+    await waitFor(() => screen.getByTestId('minutes-editor'));
+
+    await user.click(screen.getByRole('button', { name: 'Eksportér' }));
+    await waitFor(() => expect(screen.getByTestId('export-tab')).toBeInTheDocument());
+    expect(mockReplaceState).toHaveBeenCalledWith(null, '', `/meeting/${MEETING_ID}/export`);
+  });
 });
 
 // ─── Export tab ───────────────────────────────────────────────────────────────
@@ -891,6 +937,27 @@ describe('MeetingPageClient — ReviewAudio context (hasAudio)', () => {
 // ─── Phase completion flags ────────────────────────────────────────────────────
 
 describe('MeetingPageClient — phase completion', () => {
+  // ProcessStrip opens the step after the last completed one, so a finished
+  // Referat is what makes Eksport clickable.
+  it.each(['minutes', 'done', 'redacted'] as const)('completes Referat for a %s meeting with a referat', async (status) => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ status }));
+    mockGetMinutes.mockResolvedValue(makeMinutes());
+
+    renderClient({ initialTab: 'minutes' });
+    await waitFor(() => {
+      expect(screen.getByTestId('process-strip')).toHaveAttribute('data-completed', 'recording,review,minutes');
+    });
+  });
+
+  it('completes only the recording for a meeting in review', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'review' }));
+
+    renderClient({ initialTab: 'review' });
+    await waitFor(() => {
+      expect(screen.getByTestId('process-strip')).toHaveAttribute('data-completed', 'recording');
+    });
+  });
+
   it('renders ProcessStrip (present after loading) for done meeting', async () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'done' }));
 

@@ -180,7 +180,13 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     switchTab(graphStageTab(meeting.status));
   }, [meeting, activeTab, switchTab]);
 
-  if (loading) {
+  // A note is stored as a meeting, so its id resolves here too, but it has its own screen.
+  const isNote = meeting?.kind === 'note';
+  useEffect(() => {
+    if (isNote) router.replace(`/note/${meetingId}`);
+  }, [isNote, meetingId, router]);
+
+  if (loading || isNote) {
     return (
       <div style={{ padding: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <span style={{
@@ -214,8 +220,9 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
 
   const completedPhases: ProcessPhase[] = (() => {
     const s = meeting.status;
-    if (s === 'done') return ['recording', 'review', 'minutes'];
-    if (s === 'minutes') return ['recording', 'review'];
+    // These statuses come after the referat is generated, so Referat is done and
+    // ProcessStrip opens Eksport after it.
+    if (s === 'minutes' || s === 'done' || s === 'redacted') return ['recording', 'review', 'minutes'];
     if (s === 'review') return ['recording'];
     return [];
   })();
@@ -353,6 +360,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           activeVersionId={minutes.activeVersionId}
           versions={minutes.versions}
           onSaved={loadData}
+          onExport={() => switchTab('export')}
         />
       )}
 

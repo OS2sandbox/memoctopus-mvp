@@ -57,7 +57,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'bottom',
     engine: 'tooltip',
-    copy: 'Genvej: tryk R for at starte en optagelse, eller U for at uploade en lydfil.',
+    copy: 'Genveje: tryk R for at starte en optagelse, U for at uploade lydfiler eller N for at indtale en note.',
   },
   'dashboard.participant-chip': {
     id: 'dashboard.participant-chip',
