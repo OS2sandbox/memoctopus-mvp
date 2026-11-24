@@ -4,10 +4,13 @@ import React, { useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { signOut, useSession } from '@/lib/auth-client';
 import { clearPendingUploads } from '@/lib/pending-upload';
 import { useReviewAudio } from '@/lib/review-audio-context';
+import { useLeaveGuard } from '@/lib/recording/leave-guard';
 import { useOnboarding } from '@/lib/onboarding/context';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
@@ -19,6 +22,8 @@ export function TopBar() {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const { data: session } = useSession();
   const { hasAudio } = useReviewAudio();
+  const recording = useLeaveGuard();
+  const [leaveHref, setLeaveHref] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const { openWelcome } = useOnboarding();
 
@@ -45,6 +50,10 @@ export function TopBar() {
 
   function handleNavClick(e: React.MouseEvent, href: string) {
     e.preventDefault();
+    if (recording) {
+      setLeaveHref(href);
+      return;
+    }
     if (reviewMeetingId && hasAudio) {
       setPendingHref(href);
       setShowConfirm(true);
@@ -68,6 +77,28 @@ export function TopBar() {
           onDeleted={() => navigate(pendingHref ?? '/dashboard')}
         />
       )}
+
+      <Dialog open={leaveHref !== null} onOpenChange={(open) => { if (!open) setLeaveHref(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Forlad optagelsen?</DialogTitle>
+            <DialogDescription>
+              Optagelsen stopper, hvis du går fra siden. Du kan fortsætte den senere fra Arkiv.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setLeaveHref(null)}>Bliv</Button>
+            <Button
+              onClick={() => {
+                if (leaveHref) navigate(leaveHref);
+                setLeaveHref(null);
+              }}
+            >
+              Forlad
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <header style={{
         position: 'sticky', top: 0, zIndex: 40,

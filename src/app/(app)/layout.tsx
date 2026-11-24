@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { TopBar } from '@/components/layout/TopBar';
 import { ReviewAudioProvider } from '@/lib/review-audio-context';
 import { StorageScope } from '@/components/providers/StorageScope';
+import { RecordingRecovery } from '@/components/providers/RecordingRecovery';
 import { auth } from '@/lib/auth';
 import { SESSION_EXPIRED_PARAM } from '@/middleware';
 import { OnboardingProvider } from '@/lib/onboarding/context';
@@ -27,8 +28,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // rather than this server component awaiting the same DB round trip on every
   // authenticated page load, including the recording screen, for a feature that is
   // purely a client-interactive nicety.
+  //
+  // RecordingRecovery sits inside StorageScope because it reads this user's
+  // recording ledger.
   return (
     <StorageScope userId={session.user.id}>
+      <RecordingRecovery />
       <ReviewAudioProvider>
         <OnboardingProvider>
           <div className="min-h-screen bg-[var(--bg)]">

@@ -7,6 +7,7 @@ import { renderWithOnboarding } from '@/test/onboarding';
 import { OnboardingProvider } from '@/lib/onboarding/context';
 import { getStep } from '@/lib/onboarding/steps';
 import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
+import { setLeaveGuard } from '@/lib/recording/leave-guard';
 
 // Onboarding hints wrap the Arkiv nav link and, on a review page with unsaved
 // audio, the nav links themselves; mark them already-seen (for every meeting
@@ -377,6 +378,47 @@ describe('TopBar — leaving review with audio prompts DeleteAudioDialog', () =>
     renderTopBar();
     // Dialog component is not mounted at all since condition is reviewMeetingId && hasAudio
     expect(screen.queryByTestId('delete-audio-dialog')).toBeNull();
+  });
+});
+
+// ── Leaving a recording ───────────────────────────────────────────────────
+
+describe('TopBar — leaving a recording asks first', () => {
+  beforeEach(() => {
+    mockPathname = '/meeting/abc/record';
+    setLeaveGuard(true);
+  });
+  afterEach(() => {
+    setLeaveGuard(false);
+  });
+
+  it('opens a confirm dialog instead of navigating, and navigates only on confirm', () => {
+    renderTopBar();
+    fireEvent.click(screen.getByRole('link', { name: 'Arkiv' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Forlad optagelsen?' });
+    expect(mockPush).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Forlad' }));
+    expect(mockPush).toHaveBeenCalledWith('/arkiv');
+  });
+
+  it('stays on the recording when the user chooses to stay', async () => {
+    renderTopBar();
+    fireEvent.click(screen.getByRole('link', { name: 'Optag' }));
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Bliv' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('navigates at once when nothing is recording', () => {
+    setLeaveGuard(false);
+    renderTopBar();
+    fireEvent.click(screen.getByRole('link', { name: 'Arkiv' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mockPush).toHaveBeenCalledWith('/arkiv');
   });
 });
 
