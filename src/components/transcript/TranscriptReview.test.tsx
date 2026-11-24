@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TranscriptReview } from './TranscriptReview';
 import { renderWithOnboarding } from '@/test/onboarding';
@@ -641,6 +641,51 @@ describe('TranscriptReview', () => {
         // Originally 0 participants, after assign "Ny Person" is added
         expect(parseInt(rowCount.textContent ?? '0')).toBeGreaterThan(0);
       });
+    });
+  });
+
+  // ── Copy transcript ────────────────────────────────────────────────────────
+
+  describe('copy transcript', () => {
+    function stubClipboard(writeText: (text: string) => Promise<void>) {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        writable: true,
+        configurable: true,
+      });
+    }
+
+    it('copies the displayed transcript, with ticked PII replaced, and confirms', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      stubClipboard(writeText);
+      setup({
+        initialSegments: [{ ...SEG1, text: 'Hej Lars Jensen' }, SEG2, SEG3],
+        piiReplacements: [{ original: 'Lars Jensen', replacement: '[NAVN_1]', type: 'NAVN', segmentIndex: 0 }],
+      });
+
+      // fireEvent, not userEvent: userEvent intercepts navigator.clipboard.
+      fireEvent.click(screen.getByRole('button', { name: 'kopiér transskription' }));
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(
+          'Taler 1: Hej [NAVN_1]\n\nTaler 2: God morgen\n\nTaler 1: Tak for det',
+        );
+      });
+      expect(await screen.findByText('kopieret')).toHaveAttribute('role', 'status');
+    });
+
+    it('says so when the clipboard refuses', async () => {
+      stubClipboard(vi.fn().mockRejectedValue(new Error('denied')));
+      setup();
+
+      fireEvent.click(screen.getByRole('button', { name: 'kopiér transskription' }));
+
+      expect(await screen.findByText('kunne ikke kopiere')).toHaveAttribute('role', 'status');
+    });
+
+    it('disables the copy button when segments are empty', () => {
+      setup({ initialSegments: [] });
+      expect(screen.getByRole('button', { name: 'kopiér transskription' })).toBeDisabled();
     });
   });
 

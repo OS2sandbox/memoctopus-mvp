@@ -12,6 +12,8 @@ import { getStorageUserId } from '@/lib/storage/scope';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
 import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { useCopyToClipboard } from '@/lib/use-copy';
+import { transcriptToText } from '@/lib/transcript-text';
 import { formatDate } from '@/lib/utils';
 import { SaveStatus, type SaveState } from '@/components/layout/SaveStatus';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
@@ -432,6 +434,7 @@ export function TranscriptReview({
     () => applySelectedPiiReplacements(segments, piiReplacements, checkedPii),
     [segments, piiReplacements, checkedPii],
   );
+  const transcriptCopy = useCopyToClipboard();
 
   const [highlightedSegment, setHighlightedSegment] = useState<number | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1020,7 +1023,20 @@ export function TranscriptReview({
 
           {/* Header */}
           <div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>02 · gennemgang</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>02 · gennemgang</div>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'baseline', gap: 8, fontFamily: 'var(--mono)', fontSize: 11 }}>
+                <span role="status" style={{ color: transcriptCopy.failed ? 'var(--danger)' : 'var(--muted)' }}>
+                  {transcriptCopy.failed ? 'kunne ikke kopiere' : transcriptCopy.copied ? 'kopieret' : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void transcriptCopy.copy(transcriptToText(displaySegments))}
+                  disabled={segments.length === 0}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: segments.length === 0 ? 'default' : 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: segments.length === 0 ? 'var(--muted-2)' : 'var(--accent)' }}
+                >kopiér transskription</button>
+              </div>
+            </div>
             <h1 style={{ fontWeight: 300, fontSize: isMobile ? 28 : 36, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '6px 0 0' }}>
               Tjek og <em style={{ fontStyle: 'italic', color: 'var(--accent)' }}>godkend</em>.
             </h1>
