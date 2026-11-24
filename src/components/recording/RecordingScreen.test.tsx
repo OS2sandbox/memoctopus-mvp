@@ -415,6 +415,19 @@ describe('RecordingScreen — existingRecording state', () => {
     });
   });
 
+  // Regression: the old recording stayed and was played back, and diarized, as the new one.
+  it('drops the old recording on confirm overwrite', async () => {
+    const { saveAudio: storeAudio, getAudio: readAudio } = await vi.importActual<typeof import('@/lib/storage/audio')>('@/lib/storage/audio');
+    await storeAudio(meetingId, new Blob(['gammel']), 'audio/webm');
+    renderScreen({ existingRecording });
+    fireEvent.click(screen.getByText('optag igen'));
+    await waitFor(() => screen.getByText('Optag igen?'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Ja, optag igen' }));
+    });
+    await waitFor(async () => expect(await readAudio(meetingId)).toBeNull());
+  });
+
   it('puts the meeting back to recording and starts on confirm overwrite', async () => {
     await updateMeeting(meetingId, { status: 'review' });
     renderScreen({ existingRecording });
@@ -766,6 +779,9 @@ describe('RecordingScreen — stopAndSave', () => {
     expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
     expect(screen.queryByText(/ikke gemt/)).toBeNull();
     expect(mockPush).not.toHaveBeenCalled();
+    // Stored at stop, before anything settles the recording, so whoever settles it
+    // later (RecordingRecovery after a reconnect) sees that it has audio.
+    expect(mockSaveAudio).toHaveBeenCalledWith(meetingId, expect.any(Blob), expect.any(String));
   });
 
   it('tells the user what happens to the waiting parts when stopping offline', async () => {

@@ -11,8 +11,9 @@ import { connectivity } from '@/lib/recording/connectivity';
 // Each run gives up on audio older than the ledger keeps it and sends what still
 // waits. A stopped (`processing`) recording is settled by finishRecording, which
 // also settles it later once its queue has sent everything. An interrupted
-// (`recording`) one only has its waiting audio sent, so the audio is deleted as
-// soon as it is transcribed; resuming or finishing it is left to the user.
+// (`recording`) one only has its sealed batches sent, so their audio is deleted as
+// soon as it is transcribed; its open checkpoint may belong to a recording still
+// going in another tab, and resuming or finishing it is left to the user.
 
 const RUN_EVERY_MS = 60 * 60 * 1000;
 
@@ -26,7 +27,7 @@ export function RecordingRecovery(): null {
       for (const meetingId of await listMeetingIdsWithRecordingState()) {
         const status = (await getMeeting(meetingId))?.status;
         if (status === 'processing') await finishRecording(meetingId);
-        else if (status === 'recording') await getBatchQueue(meetingId).adoptPersisted();
+        else if (status === 'recording') await getBatchQueue(meetingId).adoptPersisted({ sealedOnly: true });
       }
     }
 

@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setStorageUserId } from '@/lib/storage/scope';
 import { createMeeting, getMeeting, updateMeeting } from '@/lib/storage/meetings';
-import { saveAudio } from '@/lib/storage/audio';
+import { saveAudio, getAudio } from '@/lib/storage/audio';
 import { getTranscript } from '@/lib/storage/transcripts';
 import { putBatch, completeBatch, listBatches, getPendingAudio, finalizeRecordingToTranscript } from '@/lib/storage/recording';
 import { getBatchQueue } from './batch-queue';
@@ -48,19 +48,35 @@ describe('finishRecording', () => {
 
   // Regression: whoever settled the recording first decided alone whether it had audio.
   it.each([
-    ['stored audio', async () => { await saveAudio(meetingId, new Blob(['lyd']), 'audio/webm'); }, {}, 'pending', false],
-    ['the caller diarizing', async () => {}, { diarizing: true }, 'pending', false],
-    ['no audio', async () => {}, {}, 'done', true],
-  ] as const)('with %s, diarization is %s and audioDeleted %s', async (_case, seed, opts, diarizationStatus, audioDeleted) => {
+    ['stored audio', async () => { await saveAudio(meetingId, new Blob(['lyd']), 'audio/webm'); }, 'pending', false],
+    ['no audio', async () => {}, 'done', true],
+  ] as const)('with %s, diarization is %s and audioDeleted %s', async (_case, seed, diarizationStatus, audioDeleted) => {
     await seed();
     await putBatch(batch(0), wav());
     await completeBatch(batch(0), [seg('Hej.', 0)]);
 
-    expect(await finishRecording(meetingId, opts)).toBe('saved');
+    expect(await finishRecording(meetingId)).toBe('saved');
 
     expect((await getTranscript(meetingId))?.diarizationStatus).toBe(diarizationStatus);
     expect((await getMeeting(meetingId))?.audioDeleted).toBe(audioDeleted);
   });
+
+  // Regression: two settles at once, and updateMeeting's read-then-write put the
+  // status back, so the second reported a finished recording as silent.
+  it.each([0, 1, 2, 3])(
+    'settles once when a second settle starts %i IndexedDB steps after the first',
+    async (steps) => {
+      await putBatch(batch(0), wav());
+      await completeBatch(batch(0), [seg('Hej.', 0)]);
+
+      const first = finishRecording(meetingId);
+      for (let i = 0; i < steps; i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(await Promise.all([first, finishRecording(meetingId)])).toEqual(['saved', 'saved']);
+
+      expect((await getMeeting(meetingId))?.status).toBe('review');
+      expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Hej.']);
+    },
+  );
 
   it('settles a waiting recording by itself once its last batch is transcribed', async () => {
     let answer: (r: Response) => void = () => {};
@@ -89,13 +105,16 @@ describe('finishRecording', () => {
     await completeBatch(batch(0), [seg('Gammel.', 0)]);
     await finishRecording(meetingId);
     await updateMeeting(meetingId, { status: 'recording' });
+    await saveAudio(meetingId, new Blob(['stille']), 'audio/webm');
     await putBatch(batch(1), wav());
     await completeBatch(batch(1), []);
 
     expect(await finishRecording(meetingId)).toBe('empty');
 
     expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Gammel.']);
-    expect(await getMeeting(meetingId)).not.toBeNull();
+    // Back where it was before the take, without the silent take's audio.
+    expect(await getMeeting(meetingId)).toMatchObject({ status: 'review', audioDeleted: true });
+    expect(await getAudio(meetingId)).toBeNull();
   });
 
   it('waits, and marks the meeting processing, while a batch is still untranscribed', async () => {

@@ -235,12 +235,14 @@ function createQueue(meetingId: string) {
     /**
      * Queues the open and pending batches the ledger holds for this meeting (left by
      * a closed tab or an earlier session), clears authRequired and retries at once.
+     * `sealedOnly` leaves `open` checkpoints alone: for a meeting that may still be
+     * recording in another tab, whose open batch is still filling.
      */
-    async adoptPersisted(): Promise<void> {
+    async adoptPersisted({ sealedOnly = false }: { sealedOnly?: boolean } = {}): Promise<void> {
       authRequired = false;
       const rows = await listBatches(meetingId);
       for (const row of rows) {
-        if (row.status !== 'open' && row.status !== 'pending') continue;
+        if (row.status !== 'pending' && (sealedOnly || row.status !== 'open')) continue;
         if (row.seq === openSeq || entries.has(row.seq) || settled.has(row.seq)) continue;
         entries.set(row.seq, {
           seq: row.seq,

@@ -1196,9 +1196,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     settlingRef.current = true;
     const resumedAt = resumedAtRef.current;
     try {
-      // Written before the transcript moves the meeting to `review`.
-      if (resumedAt !== undefined) await updateMeeting(meetingId, { audioDeleted: true });
-      const outcome = await finishRecording(meetingId, { diarizing: true });
+      const outcome = await finishRecording(meetingId);
       setWaitingForQueue(outcome === 'waiting');
       if (outcome === 'waiting') return;
       stoppedRef.current = null;

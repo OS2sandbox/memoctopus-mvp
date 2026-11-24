@@ -107,6 +107,21 @@ describe('RecordingRecovery', () => {
     expect(await getPendingAudio(meetingId, 1)).toBeNull();
   });
 
+  // Regression: another tab's live checkpoint was sent half-filled and its audio deleted.
+  it('leaves the open checkpoint of an interrupted recording alone', async () => {
+    fetchMock.mockResolvedValue(ok('Hej.'));
+    const meeting = await createMeeting({ title: 'Møde', status: 'recording' });
+    await putBatch({ ...batch(meeting.id, 0), status: 'open' }, wav());
+    await putBatch(batch(meeting.id, 1), wav());
+
+    render(<RecordingRecovery />);
+    await until(async () => (await listBatches(meeting.id))[1]?.status === 'done');
+
+    expect((await listBatches(meeting.id))[0]?.status).toBe('open');
+    expect(await getPendingAudio(meeting.id, 0)).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('runs again when the connection comes back', async () => {
     fetchMock.mockResolvedValue(ok('Hej.'));
     const meetingId = await stoppedRecording('recording');
