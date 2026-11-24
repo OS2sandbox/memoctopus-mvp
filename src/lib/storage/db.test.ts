@@ -5,10 +5,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // We capture the upgrade callback and the openDB arguments so tests can
 // drive the behaviour without a real IndexedDB implementation.
 
-type UpgradeCallback = (db: FakeUpgradeDb) => void;
+type UpgradeCallback = (db: FakeUpgradeDb, oldVersion: number) => void;
 
 interface CreateObjectStoreOptions {
-  keyPath?: string;
+  keyPath?: string | string[];
 }
 
 interface FakeIndex {
@@ -17,7 +17,7 @@ interface FakeIndex {
 
 interface FakeObjectStore {
   name: string;
-  keyPath: string | undefined;
+  keyPath: string | string[] | undefined;
   indexes: Map<string, FakeIndex>;
   createIndex: (name: string, keyPath: string) => FakeIndex;
 }
@@ -192,10 +192,10 @@ describe('getDB — database name and version', () => {
     expect(deletedDbs).toContain('referat-db');
   });
 
-  it('opens the database at version 1', async () => {
+  it('opens the database at version 2', async () => {
     const getDB = await freshGetDB();
     await getDB();
-    expect(capturedVersion).toBe(1);
+    expect(capturedVersion).toBe(2);
   });
 
   it('returns the DB instance resolved by idb', async () => {
@@ -273,7 +273,7 @@ describe('getDB — upgrade callback creates object stores', () => {
     const getDB = await freshGetDB();
     await getDB();
     const upgradeDb = makeFakeUpgradeDb();
-    capturedUpgrade!(upgradeDb);
+    capturedUpgrade!(upgradeDb, 0);
     return upgradeDb;
   }
 
@@ -297,9 +297,23 @@ describe('getDB — upgrade callback creates object stores', () => {
     expect(upgradeDb.stores.has('audio')).toBe(true);
   });
 
-  it('creates exactly four object stores', async () => {
+  it('creates the "recordingBatches" and "pendingAudio" object stores', async () => {
     const upgradeDb = await runUpgrade();
-    expect(upgradeDb.stores.size).toBe(4);
+    expect(upgradeDb.stores.has('recordingBatches')).toBe(true);
+    expect(upgradeDb.stores.has('pendingAudio')).toBe(true);
+  });
+
+  it('creates exactly six object stores on a new database', async () => {
+    const upgradeDb = await runUpgrade();
+    expect(upgradeDb.stores.size).toBe(6);
+  });
+
+  it('adds only the two recording stores to a version 1 database', async () => {
+    const getDB = await freshGetDB();
+    await getDB();
+    const upgradeDb = makeFakeUpgradeDb();
+    capturedUpgrade!(upgradeDb, 1);
+    expect([...upgradeDb.stores.keys()].sort()).toEqual(['pendingAudio', 'recordingBatches']);
   });
 });
 
@@ -316,7 +330,7 @@ describe('getDB — upgrade callback: keyPaths', () => {
     const getDB = await freshGetDB();
     await getDB();
     const upgradeDb = makeFakeUpgradeDb();
-    capturedUpgrade!(upgradeDb);
+    capturedUpgrade!(upgradeDb, 0);
     return upgradeDb;
   }
 
@@ -339,6 +353,12 @@ describe('getDB — upgrade callback: keyPaths', () => {
     const upgradeDb = await runUpgrade();
     expect(upgradeDb.stores.get('audio')?.keyPath).toBe('meetingId');
   });
+
+  it('the recording stores are keyed on [meetingId, seq]', async () => {
+    const upgradeDb = await runUpgrade();
+    expect(upgradeDb.stores.get('recordingBatches')?.keyPath).toEqual(['meetingId', 'seq']);
+    expect(upgradeDb.stores.get('pendingAudio')?.keyPath).toEqual(['meetingId', 'seq']);
+  });
 });
 
 describe('getDB — upgrade callback: by-meeting indexes', () => {
@@ -354,7 +374,7 @@ describe('getDB — upgrade callback: by-meeting indexes', () => {
     const getDB = await freshGetDB();
     await getDB();
     const upgradeDb = makeFakeUpgradeDb();
-    capturedUpgrade!(upgradeDb);
+    capturedUpgrade!(upgradeDb, 0);
     return upgradeDb;
   }
 
@@ -393,6 +413,18 @@ describe('getDB — upgrade callback: by-meeting indexes', () => {
     const store = upgradeDb.stores.get('audio')!;
     expect(store.indexes.size).toBe(0);
   });
+
+  it('"recordingBatches" has a "by-meeting" index on "meetingId"', async () => {
+    const upgradeDb = await runUpgrade();
+    expect(upgradeDb.stores.get('recordingBatches')!.indexes.get('by-meeting')?.keyPath).toBe('meetingId');
+  });
+
+  it('"pendingAudio" has "by-meeting" and "by-expiry" indexes', async () => {
+    const upgradeDb = await runUpgrade();
+    const store = upgradeDb.stores.get('pendingAudio')!;
+    expect(store.indexes.get('by-meeting')?.keyPath).toBe('meetingId');
+    expect(store.indexes.get('by-expiry')?.keyPath).toBe('expiresAt');
+  });
 });
 
 describe('getDB — upgrade callback idempotency (simulated re-run)', () => {
@@ -414,10 +446,10 @@ describe('getDB — upgrade callback idempotency (simulated re-run)', () => {
     // callback itself is callable twice without internal errors.
     const upgradeDb = makeFakeUpgradeDb();
     expect(() => {
-      capturedUpgrade!(upgradeDb);
+      capturedUpgrade!(upgradeDb, 0);
       // Simulate a second independent invocation with a fresh db (no state).
       const upgradeDb2 = makeFakeUpgradeDb();
-      capturedUpgrade!(upgradeDb2);
+      capturedUpgrade!(upgradeDb2, 0);
     }).not.toThrow();
   });
 
@@ -426,10 +458,10 @@ describe('getDB — upgrade callback idempotency (simulated re-run)', () => {
     await getDB();
 
     const upgradeDb1 = makeFakeUpgradeDb();
-    capturedUpgrade!(upgradeDb1);
+    capturedUpgrade!(upgradeDb1, 0);
 
     const upgradeDb2 = makeFakeUpgradeDb();
-    capturedUpgrade!(upgradeDb2);
+    capturedUpgrade!(upgradeDb2, 0);
 
     expect([...upgradeDb1.stores.keys()].sort()).toEqual([...upgradeDb2.stores.keys()].sort());
   });

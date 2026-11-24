@@ -7,6 +7,8 @@ type StoreMap = {
   transcripts: Map<string, Record<string, unknown>>;
   minutes: Map<string, Record<string, unknown>>;
   audio: Map<string, Record<string, unknown>>;
+  recordingBatches: Map<string, Record<string, unknown>>;
+  pendingAudio: Map<string, Record<string, unknown>>;
 };
 
 function makeStore(data: Map<string, Record<string, unknown>>) {
@@ -31,6 +33,8 @@ function makeStore(data: Map<string, Record<string, unknown>>) {
         });
         return Promise.resolve(results);
       },
+      getAllKeys: (query: string) =>
+        Promise.resolve([...data].filter(([, v]) => v.meetingId === query).map(([k]) => k)),
     }),
   };
 }
@@ -44,6 +48,8 @@ function resetStores() {
     transcripts: new Map(),
     minutes: new Map(),
     audio: new Map(),
+    recordingBatches: new Map(),
+    pendingAudio: new Map(),
   };
 }
 

@@ -69,6 +69,7 @@
     "concurrently": "^10.0.3",
     "drizzle-kit": "^0.31.1",
     "esbuild": "^0.28.0",
+    "fake-indexeddb": "^6.2.8",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.6",
     "typescript": "^5",

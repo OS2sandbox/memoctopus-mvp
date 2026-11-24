@@ -1,4 +1,4 @@
-import { getDB, StoredMeeting } from './db';
+import { getDB, StoredMeeting, MeetingKind } from './db';
 import { MeetingStatus } from '@/types';
 import { deleteAudio } from './audio';
 
@@ -32,6 +32,8 @@ export async function createMeeting(data: {
   // local recordings. The subject becomes the title and the scheduled start the
   // recordedAt; the live values stay on the server.
   graphManaged?: boolean;
+  // Omitted for a meeting; 'note' for a dictation (see ./notes).
+  kind?: MeetingKind;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
@@ -52,6 +54,7 @@ export async function createMeeting(data: {
   // Only write the Teams fields that were actually supplied, so a local recording's
   // record stays free of undefined keys.
   if (data.graphManaged !== undefined) meeting.graphManaged = data.graphManaged;
+  if (data.kind !== undefined) meeting.kind = data.kind;
   await db.put('meetings', meeting);
   return meeting;
 }
@@ -68,7 +71,10 @@ export async function updateMeeting(
 
 export async function deleteMeeting(id: string): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['meetings', 'transcripts', 'minutes', 'audio'], 'readwrite');
+  const tx = db.transaction(
+    ['meetings', 'transcripts', 'minutes', 'audio', 'recordingBatches', 'pendingAudio'],
+    'readwrite',
+  );
 
   // Find and delete transcript
   const transcriptIdx = tx.objectStore('transcripts').index('by-meeting');
@@ -79,6 +85,12 @@ export async function deleteMeeting(id: string): Promise<void> {
   const minutesIdx = tx.objectStore('minutes').index('by-meeting');
   const minutesList = await minutesIdx.getAll(id);
   await Promise.all(minutesList.map((m) => tx.objectStore('minutes').delete(m.id)));
+
+  // The recording ledger and any audio still waiting for transcription
+  const batchKeys = await tx.objectStore('recordingBatches').index('by-meeting').getAllKeys(id);
+  await Promise.all(batchKeys.map((k) => tx.objectStore('recordingBatches').delete(k)));
+  const audioKeys = await tx.objectStore('pendingAudio').index('by-meeting').getAllKeys(id);
+  await Promise.all(audioKeys.map((k) => tx.objectStore('pendingAudio').delete(k)));
 
   // Delete audio and meeting
   await tx.objectStore('audio').delete(id);
