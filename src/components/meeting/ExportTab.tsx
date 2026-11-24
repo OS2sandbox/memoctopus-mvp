@@ -4,13 +4,15 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { getMeeting, getMinutes } from '@/lib/storage';
+import { downloadExport } from '@/lib/export-client';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
-type ExportFormat = 'pdf' | 'md';
+type ExportFormat = Parameters<typeof downloadExport>[0]['format'];
 
 const FORMATS: { key: ExportFormat; label: string; description: string; file: string; meta: string }[] = [
   { key: 'pdf', label: 'PDF', description: 'Til arkivering og distribution. Kan ikke redigeres.', file: 'referat.pdf', meta: '2 sider · A4' },
+  { key: 'docx', label: 'Word', description: 'Kan redigeres i Word og lignende programmer.', file: 'referat.docx', meta: 'A4 · Calibri' },
   { key: 'md', label: 'Markdown', description: 'Ren tekst — egnet til Notion, Obsidian og andre.', file: 'referat.md', meta: '~3 KB · UTF-8' },
 ];
 
@@ -30,22 +32,13 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
       const [meeting, minutes] = await Promise.all([getMeeting(meetingId), getMinutes(meetingId)]);
       if (!minutes) throw new Error('Ingen referat fundet');
 
-      const res = await fetch(`/api/export/${meetingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: meeting?.title ?? 'Referat', content: minutes.content, format: selected }),
+      await downloadExport({
+        meetingId,
+        title: meeting?.title ?? 'Referat',
+        content: minutes.content,
+        format: selected,
+        filename: fmt.file,
       });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error ?? 'Eksport fejlede');
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fmt.file;
-      a.click();
-      URL.revokeObjectURL(url);
       setDownloaded(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');

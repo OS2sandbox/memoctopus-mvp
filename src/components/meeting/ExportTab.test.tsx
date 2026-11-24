@@ -91,10 +91,14 @@ describe('ExportTab — initial render', () => {
     expect(screen.getByText('aflevering')).toBeInTheDocument();
   });
 
-  it('renders both format radio buttons', () => {
+  it('offers PDF, Word and Markdown, in that order', () => {
     renderTab();
-    expect(screen.getByRole('radio', { name: /PDF/ })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Markdown/ })).toBeInTheDocument();
+    const labels = screen.getAllByRole('radio').map((r) => r.textContent);
+    expect(labels).toEqual([
+      expect.stringMatching(/^PDF/),
+      expect.stringMatching(/^Word/),
+      expect.stringMatching(/^Markdown/),
+    ]);
   });
 
   it('PDF is selected by default (aria-checked=true)', () => {
@@ -290,6 +294,27 @@ describe('ExportTab — successful export', () => {
         }),
       );
     });
+  });
+
+  it('sends format=docx and downloads referat.docx when Word is selected', async () => {
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.download);
+    });
+
+    renderTab();
+    fireEvent.click(screen.getByRole('radio', { name: /Word/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /download referat\.docx/ }));
+    });
+
+    await waitFor(() => screen.getByText(/referat\.docx downloadet/));
+    const body = JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.format).toBe('docx');
+    expect(downloads).toEqual(['referat.docx']);
+
+    vi.restoreAllMocks();
   });
 
   it('falls back to title "Referat" when meeting has no title', async () => {
@@ -556,6 +581,6 @@ describe('ExportTab — radiogroup accessibility', () => {
   it('each format button has role="radio"', () => {
     renderTab();
     const radios = screen.getAllByRole('radio');
-    expect(radios).toHaveLength(2);
+    expect(radios).toHaveLength(3);
   });
 });
