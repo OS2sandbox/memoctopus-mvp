@@ -61,6 +61,36 @@ describe('finishRecording', () => {
     expect((await getMeeting(meetingId))?.audioDeleted).toBe(audioDeleted);
   });
 
+  // Regression: a resumed session's speakers were marked done while its screen still diarized them.
+  it('leaves the speakers pending for a caller that diarizes audio it did not store, also when the drain watcher settles', async () => {
+    let answer: (r: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    await putBatch(batch(0), wav());
+
+    expect(await finishRecording(meetingId, { diarizing: true })).toBe('waiting');
+    answer(new Response(JSON.stringify({ text: 'Hej.' }), { status: 200 }));
+
+    await vi.waitFor(async () => expect((await getMeeting(meetingId))?.status).toBe('review'));
+    expect((await getTranscript(meetingId))?.diarizationStatus).toBe('pending');
+    expect((await getMeeting(meetingId))?.audioDeleted).toBe(true);
+  });
+
+  // Regression: a stale settle sent a meeting that had moved on back to review and deleted its audio.
+  it('leaves a meeting that has moved on past review alone', async () => {
+    await putBatch(batch(0), wav());
+    await completeBatch(batch(0), [seg('Hej.', 0)]);
+    await finishRecording(meetingId);
+    await saveAudio(meetingId, new Blob(['lyd']), 'audio/webm');
+    await updateMeeting(meetingId, { status: 'minutes' });
+
+    expect(await finishRecording(meetingId)).toBe('saved');
+
+    expect((await getMeeting(meetingId))?.status).toBe('minutes');
+    expect(await getAudio(meetingId)).not.toBeNull();
+  });
+
+
+
   // Regression: two settles at once, and updateMeeting's read-then-write put the
   // status back, so the second reported a finished recording as silent.
   it.each([0, 1, 2, 3])(
@@ -109,7 +139,8 @@ describe('finishRecording', () => {
     await putBatch(batch(1), wav());
     await completeBatch(batch(1), []);
 
-    expect(await finishRecording(meetingId)).toBe('empty');
+    // The screen and the drain watcher both settle it; both must hear there was no speech.
+    expect(await Promise.all([finishRecording(meetingId), finishRecording(meetingId)])).toEqual(['empty', 'empty']);
 
     expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Gammel.']);
     // Back where it was before the take, without the silent take's audio.

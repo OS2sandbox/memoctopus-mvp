@@ -1196,7 +1196,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     settlingRef.current = true;
     const resumedAt = resumedAtRef.current;
     try {
-      const outcome = await finishRecording(meetingId);
+      // This screen holds the recording and diarizes it below, stored or not.
+      const outcome = await finishRecording(meetingId, { diarizing: true });
       setWaitingForQueue(outcome === 'waiting');
       if (outcome === 'waiting') return;
       stoppedRef.current = null;

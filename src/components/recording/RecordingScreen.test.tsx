@@ -770,6 +770,10 @@ describe('RecordingScreen — stopAndSave', () => {
   // Regression: a recording whose batches all failed was discarded ("ikke gemt").
   it('keeps the recording waiting for transcription when every batch fails', async () => {
     fetchMock.mockResolvedValue(serverError());
+    const statusWhenStored: (string | undefined)[] = [];
+    mockSaveAudio.mockImplementation(async () => {
+      statusWhenStored.push((await getMeeting(meetingId))?.status);
+    });
     await startAndStop();
 
     await waitFor(async () => {
@@ -779,9 +783,9 @@ describe('RecordingScreen — stopAndSave', () => {
     expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
     expect(screen.queryByText(/ikke gemt/)).toBeNull();
     expect(mockPush).not.toHaveBeenCalled();
-    // Stored at stop, before anything settles the recording, so whoever settles it
-    // later (RecordingRecovery after a reconnect) sees that it has audio.
-    expect(mockSaveAudio).toHaveBeenCalledWith(meetingId, expect.any(Blob), expect.any(String));
+    // Stored at stop, before anything settles the recording (still `recording`, not
+    // yet `processing`), so whoever settles it later sees that it has audio.
+    expect(statusWhenStored).toEqual(['recording']);
   });
 
   it('tells the user what happens to the waiting parts when stopping offline', async () => {
