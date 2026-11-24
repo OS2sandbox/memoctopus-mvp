@@ -35,8 +35,8 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('next/link', () => ({
-  default: ({ href, children, style }: { href: string; children: React.ReactNode; style?: React.CSSProperties }) => (
-    <a href={href} style={style}>{children}</a>
+  default: ({ href, children, ...props }: React.ComponentProps<'a'>) => (
+    <a href={href} {...props}>{children}</a>
   ),
 }));
 
@@ -44,11 +44,17 @@ const mockGetAllMeetings = vi.fn();
 const mockCreateMeeting = vi.fn();
 const mockUpdateMeeting = vi.fn();
 const mockDeleteMeeting = vi.fn();
+const mockCreateNote = vi.fn();
+const mockListRecordingIds = vi.fn();
+const mockGetMeeting = vi.fn();
 
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
+  listMeetingIdsWithRecordingState: (...args: unknown[]) => mockListRecordingIds(...args),
+  getMeeting: (...args: unknown[]) => mockGetMeeting(...args),
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
   updateMeeting: (...args: unknown[]) => mockUpdateMeeting(...args),
+  createNote: (...args: unknown[]) => mockCreateNote(...args),
 }));
 
 // The orphan cleanup goes through the shared helper, which also unregisters the
@@ -75,10 +81,10 @@ function routeFetch(opts: { status?: () => unknown; arm?: () => unknown } = {}) 
   });
 }
 
-const mockSetPendingUploadFile = vi.fn();
+const mockSetPendingUploadFiles = vi.fn();
 
 vi.mock('@/lib/pending-upload', () => ({
-  setPendingUploadFile: (...args: unknown[]) => mockSetPendingUploadFile(...args),
+  setPendingUploadFiles: (...args: unknown[]) => mockSetPendingUploadFiles(...args),
 }));
 
 vi.mock('@/lib/use-is-mobile', () => ({
@@ -99,7 +105,7 @@ beforeEach(() => {
   mockCreateMeeting.mockReset();
   mockUpdateMeeting.mockReset();
   mockUpdateMeeting.mockResolvedValue(undefined);
-  mockSetPendingUploadFile.mockReset();
+  mockSetPendingUploadFiles.mockReset();
   mockDeleteMeeting.mockReset();
   mockDeleteMeeting.mockResolvedValue(undefined);
   mockSignInSocial.mockReset();
@@ -110,6 +116,12 @@ beforeEach(() => {
   mockGetAllMeetings.mockResolvedValue([]);
   // Default: createMeeting returns a meeting with id 'meeting-abc'
   mockCreateMeeting.mockResolvedValue({ id: 'meeting-abc' });
+  mockCreateNote.mockReset();
+  mockCreateNote.mockResolvedValue({ id: 'note-1' });
+  // Default: no recording was left mid-meeting.
+  mockListRecordingIds.mockReset();
+  mockListRecordingIds.mockResolvedValue([]);
+  mockGetMeeting.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -188,6 +200,21 @@ describe('OptaqPage — meeting count footer', () => {
     });
   });
 
+  // Notes are listed under Noter in the Arkiv, not among the meetings.
+  it('leaves notes out of the count', async () => {
+    mockGetAllMeetings.mockResolvedValue([{ id: '1' }, { id: '2', kind: 'note' }, { id: '3', kind: 'meeting' }]);
+    renderPage();
+    expect(await screen.findByText(/se 2 tidligere møder i arkivet/)).toBeInTheDocument();
+  });
+
+  it('shows "ingen tidligere møder" when there are only notes', async () => {
+    mockGetAllMeetings.mockResolvedValue([{ id: '1', kind: 'note' }]);
+    renderPage();
+    await waitFor(() => expect(mockGetAllMeetings).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getByText('ingen tidligere møder')).toBeInTheDocument();
+  });
+
   it('shows "ingen tidligere møder" when getAllMeetings returns empty', async () => {
     mockGetAllMeetings.mockResolvedValue([]);
     renderPage();
@@ -225,6 +252,17 @@ describe('OptaqPage — meeting count footer', () => {
     expect(screen.getByText('ingen tidligere møder')).toBeInTheDocument();
     // cleanup — resolve the promise
     act(() => { resolve([]); });
+  });
+});
+
+describe('OptaqPage — interrupted recording', () => {
+  it('offers to continue a recording that was left mid-meeting', async () => {
+    mockListRecordingIds.mockResolvedValue(['r1']);
+    mockGetMeeting.mockResolvedValue({ id: 'r1', title: 'Budgetmøde', status: 'recording' });
+
+    renderPage();
+
+    expect(await screen.findByRole('link', { name: 'Fortsæt optagelsen af Budgetmøde' })).toHaveAttribute('href', '/meeting/r1');
   });
 });
 
@@ -561,8 +599,58 @@ describe('OptaqPage — record flow', () => {
 // Upload flow
 // ---------------------------------------------------------------------------
 
+describe('OptaqPage — note', () => {
+  it('creates a note and opens it recording when the note action is clicked', async () => {
+    renderPage();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'indtal en note →' }));
+    });
+
+    expect(mockCreateNote).toHaveBeenCalledTimes(1);
+    expect(mockPush).toHaveBeenCalledWith('/note/note-1?autostart=1');
+    expect(mockCreateMeeting).not.toHaveBeenCalled();
+  });
+
+  it.each(['n', 'N'])('creates a note on the %s shortcut', async (key) => {
+    renderPage();
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole('heading', { level: 1 }), { key });
+    });
+
+    expect(mockCreateNote).toHaveBeenCalledTimes(1);
+    expect(mockPush).toHaveBeenCalledWith('/note/note-1?autostart=1');
+  });
+
+  it('ignores N while the user types in a field', async () => {
+    renderPage();
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByPlaceholderText('Navngiv mødet…'), { key: 'n' });
+    });
+
+    expect(mockCreateNote).not.toHaveBeenCalled();
+  });
+
+  it('says so and stays when the note cannot be created', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockCreateNote.mockRejectedValue(new Error('quota'));
+    renderPage();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'indtal en note →' }));
+    });
+
+    expect(await screen.findByText('Noten kunne ikke oprettes. Prøv igen.')).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe('OptaqPage — upload flow', () => {
-  it('calls setPendingUploadFile with the chosen file', async () => {
+  it('calls setPendingUploadFiles with the chosen file', async () => {
     renderPage();
     const file = new File(['audio data'], 'test.mp3', { type: 'audio/mpeg' });
     const input = document.getElementById('upload-input') as HTMLInputElement;
@@ -572,7 +660,21 @@ describe('OptaqPage — upload flow', () => {
       fireEvent.change(input, { target: { files: [file] } });
     });
 
-    expect(mockSetPendingUploadFile).toHaveBeenCalledWith(file);
+    expect(mockSetPendingUploadFiles).toHaveBeenCalledWith([file]);
+  });
+
+  it('lets the user pick several files and passes all of them on, in the order picked', async () => {
+    renderPage();
+    const files = ['a.mp3', 'b.mp3', 'c.mp3'].map((n) => new File(['x'], n, { type: 'audio/mpeg' }));
+    const input = document.getElementById('upload-input') as HTMLInputElement;
+    expect(input).toHaveAttribute('multiple');
+
+    await act(async () => {
+      fireEvent.change(input, { target: { files } });
+    });
+
+    expect(mockSetPendingUploadFiles).toHaveBeenCalledWith(files);
+    expect(mockPush).toHaveBeenCalledWith('/meeting/new');
   });
 
   it('navigates to /meeting/new after selecting a file', async () => {
@@ -587,7 +689,7 @@ describe('OptaqPage — upload flow', () => {
     expect(mockPush).toHaveBeenCalledWith('/meeting/new');
   });
 
-  it('does not call setPendingUploadFile when no file is selected', async () => {
+  it('does not call setPendingUploadFiles when no file is selected', async () => {
     renderPage();
     const input = document.getElementById('upload-input') as HTMLInputElement;
 
@@ -595,7 +697,7 @@ describe('OptaqPage — upload flow', () => {
       fireEvent.change(input, { target: { files: [] } });
     });
 
-    expect(mockSetPendingUploadFile).not.toHaveBeenCalled();
+    expect(mockSetPendingUploadFiles).not.toHaveBeenCalled();
     expect(mockPush).not.toHaveBeenCalled();
   });
 
@@ -1072,7 +1174,7 @@ describe('OptaqPage — keyboard shortcut hint', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await tabTo(user, screen.getByText('genveje: R · U'));
+    await tabTo(user, screen.getByText('genveje: R · U · N'));
     expect(await screen.findByRole('tooltip')).toHaveTextContent(
       getStep('dashboard.keyboard-shortcuts').copy,
     );

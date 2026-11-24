@@ -2,11 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getAllMeetings, StoredMeeting } from '@/lib/storage';
+import { getAllMeetings, listMeetingIdsWithRecordingState, StoredMeeting } from '@/lib/storage';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { importOutlookMeetings, type ServerTeamsMeeting } from '@/lib/outlook/import-meetings';
 import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 import { SkabelonerList } from '@/components/skabeloner/SkabelonerList';
+import { NoteList } from '@/components/note/NoteList';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import {
@@ -20,7 +21,10 @@ import {
 import { Meeting } from '@/types';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
-type Tab = 'meetings' | 'skabeloner';
+type Tab = 'meetings' | 'notes' | 'skabeloner';
+
+// The ?tab= value for each tab other than the default one.
+const TAB_PARAMS = { notes: 'noter', skabeloner: 'skabeloner' } as const;
 
 /**
  * What the row badge should say about a Teams meeting, from the server's view.
@@ -34,7 +38,7 @@ function serverBadgeState(m: ServerTeamsMeeting): string {
 }
 
 export default function ArkivPage() {
-  const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null })[]>([]);
+  const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null; interrupted: boolean })[]>([]);
   const [teamsStates, setTeamsStates] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('meetings');
@@ -45,11 +49,11 @@ export default function ArkivPage() {
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Allow deep-linking to the Skabeloner tab (e.g. from the old /templates route).
+  // Allow deep-linking to a tab (e.g. Skabeloner from the old /templates route).
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('tab') === 'skabeloner') {
-      setTab('skabeloner');
-    }
+    const param = new URLSearchParams(window.location.search).get('tab');
+    const linked = (Object.keys(TAB_PARAMS) as (keyof typeof TAB_PARAMS)[]).find((t) => TAB_PARAMS[t] === param);
+    if (linked) setTab(linked);
   }, []);
 
   useEffect(() => {
@@ -61,15 +65,21 @@ export default function ArkivPage() {
       .catch(() => null)
       .then((server) => {
         if (server) setTeamsStates(Object.fromEntries(server.map((m) => [m.id, serverBadgeState(m)])));
-        return getAllMeetings();
+        return Promise.all([getAllMeetings(), listMeetingIdsWithRecordingState()] as const);
       })
-      .then((rows) => {
+      .then(([rows, ledgerIds]) => {
+        const withLedger = new Set(ledgerIds);
+        // InterruptedRecordingBanner applies the same rule; page.test.tsx pins the two together.
+        const isInterrupted = (r: StoredMeeting) => r.status === 'recording' && withLedger.has(r.id);
         const mapped = rows
+          // Notes have their own tab (NoteList).
+          .filter((r) => r.kind !== 'note')
           // Hide meetings that never got off the ground: an abandoned local recording, or an
           // abandoned recording that produced nothing (still 'recording', no saved
           // audio). RecordingScreen deletes these on unmount; this also covers the
-          // navigation race and orphans left by a crash or closed tab.
-          .filter((r) => !(r.status === 'recording' && r.audioSizeBytes === 0))
+          // navigation race and orphans left by a crash or closed tab. A recording with
+          // ledger rows was interrupted, not abandoned: its meeting page offers to resume it.
+          .filter((r) => isInterrupted(r) || !(r.status === 'recording' && r.audioSizeBytes === 0))
           .map((r: StoredMeeting) => ({
             id: r.id,
             title: r.title,
@@ -78,6 +88,7 @@ export default function ArkivPage() {
             createdAt: new Date(r.createdAt),
             updatedAt: new Date(r.updatedAt),
             durationSeconds: r.audioDurationSeconds,
+            interrupted: isInterrupted(r),
           }));
         setMeetings(mapped);
       })
@@ -91,7 +102,7 @@ export default function ArkivPage() {
   function selectTab(next: Tab) {
     setTab(next);
     if (next !== 'meetings') exitEditMode();
-    const url = next === 'skabeloner' ? '/arkiv?tab=skabeloner' : '/arkiv';
+    const url = next === 'meetings' ? '/arkiv' : `/arkiv?tab=${TAB_PARAMS[next]}`;
     window.history.replaceState(null, '', url);
   }
 
@@ -145,6 +156,7 @@ export default function ArkivPage() {
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'meetings', label: 'Møder' },
+    { key: 'notes', label: 'Noter' },
     { key: 'skabeloner', label: 'Skabeloner' },
   ];
 
@@ -274,6 +286,8 @@ export default function ArkivPage() {
             </div>
           </>
         )
+      ) : tab === 'notes' ? (
+        <NoteList />
       ) : (
         <SkabelonerList />
       )}

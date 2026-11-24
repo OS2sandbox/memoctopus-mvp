@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { renderWithOnboarding } from '@/test/onboarding';
 
 // "Rediger arkiv" is wrapped in an OnboardingHint, whose useOnboarding() throws
@@ -18,8 +18,12 @@ vi.mock('@/components/skabeloner/SkabelonerList', () => ({ SkabelonerList: () =>
 const mockGetAllMeetings = vi.fn();
 const mockGetMeeting = vi.fn();
 const mockCreateMeeting = vi.fn();
+const mockListNotes = vi.fn();
+const mockListRecordingIds = vi.fn();
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
+  listNotes: (...args: unknown[]) => mockListNotes(...args),
+  listMeetingIdsWithRecordingState: (...args: unknown[]) => mockListRecordingIds(...args),
   getMeeting: (...args: unknown[]) => mockGetMeeting(...args),
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
 }));
@@ -32,6 +36,7 @@ vi.mock('@/lib/teams/client-delete', () => ({
 }));
 
 import ArkivPage from './page';
+import { InterruptedRecordingBanner } from '@/components/recording/InterruptedRecordingBanner';
 
 function stored(id: string, title: string) {
   return {
@@ -57,6 +62,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetAllMeetings.mockResolvedValue([stored('a', 'Teams-møde A'), stored('b', 'Lokalt møde B')]);
   mockDelete.mockResolvedValue(undefined);
+  mockListNotes.mockResolvedValue([]);
+  mockListRecordingIds.mockResolvedValue([]);
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -85,6 +92,90 @@ describe('ArkivPage — bulk delete', () => {
     expect(screen.queryByText('Lokalt møde B')).toBeNull();
     // Still selected, so "Slet valgte" can retry exactly the failed ones.
     expect(screen.getByText('Slet valgte (1)')).toBeInTheDocument();
+  });
+});
+
+describe('ArkivPage — notes', () => {
+  const aNote = { ...stored('n1', 'Note · 8. september'), kind: 'note' };
+
+  it('keeps notes out of the meeting list and its count', async () => {
+    mockGetAllMeetings.mockResolvedValue([stored('a', 'Teams-møde A'), aNote]);
+
+    render(<ArkivPage />);
+
+    expect(await screen.findByText('Teams-møde A')).toBeInTheDocument();
+    expect(screen.queryByText('Note · 8. september')).toBeNull();
+    expect(screen.getByText('1 møder')).toBeInTheDocument();
+  });
+
+  it('lists notes under the Noter tab, each opening the note', async () => {
+    mockGetAllMeetings.mockResolvedValue([stored('a', 'Teams-møde A'), aNote]);
+    mockListNotes.mockResolvedValue([aNote]);
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+
+    render(<ArkivPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Noter' }));
+
+    expect(await screen.findByRole('link', { name: /Note · 8\. september/ })).toHaveAttribute('href', '/note/n1');
+    expect(screen.queryByText('Teams-møde A')).toBeNull();
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/arkiv?tab=noter');
+  });
+
+  it('opens on the Noter tab from its link', async () => {
+    window.history.pushState(null, '', '/arkiv?tab=noter');
+    mockListNotes.mockResolvedValue([aNote]);
+
+    render(<ArkivPage />);
+
+    expect(await screen.findByRole('link', { name: /Note · 8\. september/ })).toBeInTheDocument();
+    window.history.pushState(null, '', '/');
+  });
+});
+
+describe('ArkivPage — interrupted recordings', () => {
+  // A recording left mid-meeting has saved no audio, only its ledger rows.
+  function leftRecording(id: string, title: string) {
+    return { ...stored(id, title), status: 'recording', audioSizeBytes: 0 };
+  }
+
+  it('keeps a recording that has ledger rows, badged Afbrudt and opening the meeting', async () => {
+    mockGetAllMeetings.mockResolvedValue([leftRecording('r1', 'Budgetmøde'), leftRecording('r2', 'Opgivet møde')]);
+    mockListRecordingIds.mockResolvedValue(['r1']);
+
+    render(<ArkivPage />);
+
+    const link = await screen.findByRole('link', { name: /Budgetmøde/ });
+    expect(link).toHaveAttribute('href', '/meeting/r1');
+    expect(within(link).getByText('Afbrudt')).toBeInTheDocument();
+    expect(screen.queryByText('Opgivet møde')).toBeNull();
+    expect(screen.getByText('1 møder')).toBeInTheDocument();
+  });
+
+  // The Arkiv and the dashboard banner each decide which meetings are interrupted.
+  // These cases pin the two to one answer, so neither can drift on its own.
+  it.each([
+    ['recording', true, true],
+    ['recording', false, false],
+    ['processing', true, false],
+    ['done', true, false],
+  ] as const)('a %s meeting, ledger rows %s: interrupted is %s in the Arkiv and the banner', async (status, hasRows, interrupted) => {
+    const meeting = { ...stored('m1', 'Budgetmøde'), status, audioSizeBytes: status === 'recording' ? 0 : 10 };
+    mockGetAllMeetings.mockResolvedValue([meeting]);
+    mockGetMeeting.mockResolvedValue(meeting);
+    mockListRecordingIds.mockResolvedValue(hasRows ? ['m1'] : []);
+
+    const arkiv = render(<ArkivPage />);
+    await waitFor(() => expect(mockGetAllMeetings).toHaveBeenCalled());
+    await act(async () => {});
+    expect(!!within(arkiv.container).queryByText('Afbrudt')).toBe(interrupted);
+    arkiv.unmount();
+
+    const banner = render(<InterruptedRecordingBanner />);
+    await waitFor(() => expect(mockListRecordingIds).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    const link = within(banner.container).queryByText('fortsæt optagelse →');
+    expect(!!link).toBe(interrupted);
+    if (link) expect(link).toHaveAttribute('href', '/meeting/m1');
   });
 });
 

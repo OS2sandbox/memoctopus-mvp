@@ -7,8 +7,8 @@ import { renderWithOnboarding, FRESH_ONBOARDING } from '@/test/onboarding';
 
 // Mock next/link to render a simple anchor so we can inspect href
 vi.mock('next/link', () => ({
-  default: ({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) => (
-    <a href={href} className={className}>{children}</a>
+  default: ({ href, children, ...props }: React.ComponentProps<'a'>) => (
+    <a href={href} {...props}>{children}</a>
   ),
 }));
 
@@ -33,6 +33,7 @@ type ArchiveMeeting = {
   status: string;
   createdAt: Date;
   durationSeconds: number | null;
+  interrupted?: boolean;
 };
 
 function makeRow(overrides: Partial<ArchiveMeeting> = {}): ArchiveMeeting {
@@ -186,6 +187,20 @@ describe('ArchiveMeetingRow — status badge', () => {
     expect(screen.queryByText('joining')).toBeNull();
   });
 
+  // Left mid-meeting with transcribed batches saved: the meeting page offers to resume it.
+  it('shows "Afbrudt" for an interrupted recording and opens the meeting', () => {
+    renderRow(makeRow({ id: 'abc', status: 'recording', interrupted: true }));
+    expect(screen.getByText('Afbrudt')).toBeInTheDocument();
+    expect(screen.queryByText('Optager')).toBeNull();
+    expect(screen.getByRole('link', { name: /Ugentligt statusmøde/ })).toHaveAttribute('href', '/meeting/abc');
+  });
+
+  // The Arkiv decides what is interrupted; the row does not work it out a second time.
+  it('takes the interrupted flag as given', () => {
+    renderRow(makeRow({ status: 'processing', interrupted: true }));
+    expect(screen.getByText('Afbrudt')).toBeInTheDocument();
+  });
+
   it('shows the raw status string for an unknown status', () => {
     renderRow(makeRow({ status: 'custom-status' }));
     expect(screen.getByText('custom-status')).toBeInTheDocument();
@@ -223,19 +238,19 @@ describe('ArchiveMeetingRow — link routing (statusHref)', () => {
 
   it('links to /meeting/:id/minutes for minutes status', () => {
     renderRow(makeRow({ id: 'abc', status: 'minutes' }));
-    const link = screen.getByRole('link');
+    const link = screen.getByRole('link', { name: /Ugentligt statusmøde/ });
     expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
   });
 
   it('links to /meeting/:id/minutes for done status', () => {
     renderRow(makeRow({ id: 'abc', status: 'done' }));
-    const link = screen.getByRole('link');
+    const link = screen.getByRole('link', { name: /Ugentligt statusmøde/ });
     expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
   });
 
   it('links to /meeting/:id/minutes for redacted status', () => {
     renderRow(makeRow({ id: 'abc', status: 'redacted' }));
-    const link = screen.getByRole('link');
+    const link = screen.getByRole('link', { name: /Ugentligt statusmøde/ });
     expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
   });
 
@@ -246,6 +261,27 @@ describe('ArchiveMeetingRow — link routing (statusHref)', () => {
     renderRow(makeRow({ id: 'abc', status }));
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', '/meeting/abc');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Export link
+// ---------------------------------------------------------------------------
+
+describe('ArchiveMeetingRow — export link', () => {
+  it.each(['minutes', 'done', 'redacted'])('links a %s meeting straight to its export', (status) => {
+    renderRow(makeRow({ id: 'abc', status }));
+    expect(screen.getByRole('link', { name: 'Eksportér referat' })).toHaveAttribute('href', '/meeting/abc/export');
+  });
+
+  it.each(['recording', 'review', 'failed'])('offers no export for a %s meeting', (status) => {
+    renderRow(makeRow({ id: 'abc', status }));
+    expect(screen.queryByRole('link', { name: 'Eksportér referat' })).toBeNull();
+  });
+
+  it('offers no export in selection mode', () => {
+    renderRow(makeRow({ status: 'done' }), { selectionMode: true });
+    expect(screen.queryByRole('link', { name: 'Eksportér referat' })).toBeNull();
   });
 });
 
@@ -560,7 +596,7 @@ describe('ArchiveMeetingRow — delete dialog', () => {
 describe('ArchiveMeetingRow — normal mode (no selection)', () => {
   it('renders a link to the meeting', () => {
     renderRow(makeRow({ id: 'abc', status: 'done' }));
-    expect(screen.getByRole('link')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Ugentligt statusmøde/ })).toBeInTheDocument();
   });
 
   it('does not render a checkbox in normal mode', () => {

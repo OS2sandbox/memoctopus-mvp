@@ -22,6 +22,8 @@ type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' |
   durationSeconds: number | null;
   /** The server's state for a Teams meeting, when the archive could fetch it. */
   teamsState?: string;
+  /** A `recording` meeting with ledger rows: left mid-meeting, and resumable. */
+  interrupted?: boolean;
 };
 
 /**
@@ -36,11 +38,16 @@ function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeo
     // Armed from Outlook and over, but never opened: opening it starts the fetch.
     if (m.teamsState === 'deferred') return { label: 'Åbn for at hente', variant: 'default' };
   }
+  if (m.interrupted) return { label: 'Afbrudt', variant: 'secondary' };
   // The removed Playwright bot's state, no longer in MeetingStatus but still on
   // meetings it left in IndexedDB. It never finished joining, so nothing was
   // recorded by it after that — the meeting page explains this.
   if ((m.status as string) === 'joining') return { label: 'Afbrudt', variant: 'secondary' };
   return { label: statusLabel(m.status), variant: statusVariant(m.status) };
+}
+
+function hasMinutes(m: ArchiveMeeting) {
+  return m.status === 'minutes' || m.status === 'done' || m.status === 'redacted';
 }
 
 /**
@@ -50,7 +57,7 @@ function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeo
  */
 function statusHref(m: ArchiveMeeting) {
   if (m.status === 'review') return `/meeting/${m.id}/review`;
-  if (m.status === 'minutes' || m.status === 'done' || m.status === 'redacted') return `/meeting/${m.id}/minutes`;
+  if (hasMinutes(m)) return `/meeting/${m.id}/minutes`;
   return `/meeting/${m.id}`;
 }
 
@@ -136,6 +143,21 @@ export function ArchiveMeetingRow({
         <Link href={statusHref(meeting)} className="flex flex-1 min-w-0 items-center gap-4">
           {rowBody}
         </Link>
+
+        {hasMinutes(meeting) && (
+          <Link
+            href={`/meeting/${meeting.id}/export`}
+            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--fill)] transition-colors"
+            aria-label="Eksportér referat"
+            title="Eksportér referat"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </Link>
+        )}
 
         <OnboardingTooltip stepId="arkiv.delete-button-touch">
           <button

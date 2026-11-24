@@ -4,15 +4,16 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { createMeeting, getAllMeetings, updateMeeting } from '@/lib/storage';
+import { createMeeting, createNote, getAllMeetings, updateMeeting } from '@/lib/storage';
 import { importOutlookMeetings } from '@/lib/outlook/import-meetings';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
-import { setPendingUploadFile } from '@/lib/pending-upload';
+import { setPendingUploadFiles } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { armErrorMessage } from '@/components/dashboard/arm-error-message';
 import { signIn } from '@/lib/auth-client';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
+import { InterruptedRecordingBanner } from '@/components/recording/InterruptedRecordingBanner';
 
 /** The parts of POST /api/teams/meetings' answer the dashboard keeps. */
 interface RegisteredTeamsMeeting {
@@ -59,6 +60,7 @@ export default function OptaqPage() {
   const [linkLoading, setLinkLoading] = useState(false);
   const [linkError, setLinkError] = useState('');
   const [recordError, setRecordError] = useState('');
+  const [noteError, setNoteError] = useState('');
   const [meetingCount, setMeetingCount] = useState<number | null>(null);
   const [teamsStatus, setTeamsStatus] = useState<TeamsStatus | null>(null);
 
@@ -68,7 +70,8 @@ export default function OptaqPage() {
     importOutlookMeetings()
       .catch(() => null)
       .then(() => getAllMeetings())
-      .then((meetings) => setMeetingCount(meetings.length))
+      // Notes are kept apart from meetings, under Noter in the Arkiv.
+      .then((meetings) => setMeetingCount(meetings.filter((m) => m.kind !== 'note').length))
       .catch((err) => { console.warn('[dashboard] getAllMeetings failed:', err); });
   }, []);
 
@@ -98,6 +101,7 @@ export default function OptaqPage() {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startRecording(); }
     if (e.key === 'u' || e.key === 'U') document.getElementById('upload-input')?.click();
+    if (e.key === 'n' || e.key === 'N') { e.preventDefault(); startNote(); }
   }
 
   async function startRecording() {
@@ -116,6 +120,20 @@ export default function OptaqPage() {
     } catch (err) {
       console.error('[dashboard] startRecording failed:', err);
       setRecordError('Noget gik galt. Prøv igen.');
+      setLoading(false);
+    }
+  }
+
+  async function startNote() {
+    if (loading) return;
+    setLoading(true);
+    setNoteError('');
+    try {
+      const note = await createNote();
+      router.push(`/note/${note.id}?autostart=1`);
+    } catch (err) {
+      console.error('[dashboard] startNote failed:', err);
+      setNoteError('Noten kunne ikke oprettes. Prøv igen.');
       setLoading(false);
     }
   }
@@ -220,6 +238,8 @@ export default function OptaqPage() {
             Optagelser i browseren gemmes kun på din maskine.
           </div>
         </div>
+
+        <InterruptedRecordingBanner />
 
         {/* Teams — access hints. A Teams meeting is registered by pasting its
             mødelink into the box above; nothing is listed from the calendar. */}
@@ -360,7 +380,7 @@ export default function OptaqPage() {
                 marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11,
                 color: 'var(--muted)', cursor: 'default', display: 'inline-block',
               }}>
-                genveje: R · U
+                genveje: R · U · N
               </div>
             </OnboardingTooltip>
 
@@ -450,16 +470,39 @@ export default function OptaqPage() {
                 id="upload-input"
                 type="file"
                 accept="audio/*,video/*"
+                multiple
                 style={{ display: 'none' }}
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    setPendingUploadFile(file);
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length > 0) {
+                    setPendingUploadFiles(files);
                     router.push('/meeting/new');
                     e.target.value = '';
                   }
                 }}
               />
+            </div>
+
+            <div style={{
+              marginTop: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)',
+            }}>
+              eller{' '}
+              <button
+                type="button"
+                onClick={startNote}
+                disabled={loading}
+                style={{
+                  font: 'inherit', padding: 0, background: 'none', border: 'none',
+                  color: 'var(--ink-2)', textDecoration: 'underline',
+                  textDecorationColor: 'var(--line-2)', textUnderlineOffset: 3,
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                indtal en note →
+              </button>
+              {noteError && (
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--error, #e05252)' }}>{noteError}</div>
+              )}
             </div>
           </div>
 
