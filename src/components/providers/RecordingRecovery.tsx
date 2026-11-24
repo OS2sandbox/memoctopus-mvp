@@ -20,7 +20,8 @@ import { connectivity } from '@/lib/recording/connectivity';
 
 const RUN_EVERY_MS = 60 * 60 * 1000;
 
-export function useRecordingRecovery(): void {
+/** Mounted once in the app layout; renders nothing. */
+export function RecordingRecovery(): null {
   useEffect(() => {
     // One drain watcher per meeting, however many runs find it.
     const watchers = new Map<string, () => void>();
@@ -87,10 +88,5 @@ export function useRecordingRecovery(): void {
       watchers.clear();
     };
   }, []);
-}
-
-/** Mounted once in the app layout; renders nothing. */
-export function RecordingRecovery(): null {
-  useRecordingRecovery();
   return null;
 }

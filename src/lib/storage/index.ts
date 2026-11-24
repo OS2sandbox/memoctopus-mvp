@@ -10,7 +10,4 @@ export type {
   StoredTranscript,
   StoredMinutes,
   StoredAudio,
-  MeetingKind,
-  StoredRecordingBatch,
-  StoredPendingAudio,
 } from './db';

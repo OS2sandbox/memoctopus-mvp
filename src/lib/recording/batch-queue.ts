@@ -25,7 +25,7 @@ export type SealedBatch = {
   totalWavDuration: number;
 };
 
-export type QueueState = {
+type QueueState = {
   // Batches this queue holds that have no text yet, in flight or waiting to retry.
   waiting: number;
   // The last send got a 401. Sending stops until adoptPersisted() is called again.
