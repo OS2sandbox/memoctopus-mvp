@@ -1,18 +1,25 @@
 // @vitest-environment jsdom
+import 'fake-indexeddb/auto';
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MicVAD } from '@ricky0123/vad-web';
 import { tabTo } from '@/test/keyboard';
 import { getStep } from '@/lib/onboarding/steps';
+import { setStorageUserId } from '@/lib/storage/scope';
+import {
+  createMeeting, getMeeting, updateMeeting, getTranscript, getPendingAudio, listBatches,
+  putBatch, completeBatch,
+} from '@/lib/storage';
+import { isLeaveGuarded } from '@/lib/recording/leave-guard';
 import { RecordingScreen } from './RecordingScreen';
 import { renderWithOnboarding } from '@/test/onboarding';
 
 // Onboarding hints wrap the start button, stop button, clarify panel, and
-// audio-lifecycle caption; mark them already-seen (for the "meeting-abc" id
-// used throughout this suite) so the popovers don't render and DOM queries
-// keep targeting the underlying controls (mirrors the real app, which mounts
-// RecordingScreen under the app-level OnboardingProvider).
+// audio-lifecycle caption; mark them already-seen so the popovers don't render and
+// DOM queries keep targeting the underlying controls (mirrors the real app, which
+// mounts RecordingScreen under the app-level OnboardingProvider).
 function render(ui: React.ReactElement) {
   return renderWithOnboarding(ui, {
     tourSkipped: true,
@@ -41,25 +48,17 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => ({ get: mockSearchParamsGet }),
 }));
 
-// ── Storage mocks ──────────────────────────────────────────────────────────
+// ── Storage ────────────────────────────────────────────────────────────────
 
+// The meeting, the recording ledger and the transcript live in a real IndexedDB
+// (fake-indexeddb), one database per test. Only the audio archive is replaced:
+// jsdom's Blob cannot be stored, and the archive-failure tests make it throw.
 const mockSaveAudio = vi.fn().mockResolvedValue(undefined);
-const mockSaveTranscript = vi.fn().mockResolvedValue(undefined);
-const mockUpdateMeeting = vi.fn().mockResolvedValue(undefined);
-const mockDeleteMeeting = vi.fn().mockResolvedValue(undefined);
-const mockGetMeeting = vi.fn().mockResolvedValue(null);
-const mockGetTranscript = vi.fn().mockResolvedValue(null);
-const mockGetAudio = vi.fn().mockResolvedValue(null);
 
-vi.mock('@/lib/storage', () => ({
-  saveAudio: (...args: unknown[]) => mockSaveAudio(...args),
-  saveTranscript: (...args: unknown[]) => mockSaveTranscript(...args),
-  updateMeeting: (...args: unknown[]) => mockUpdateMeeting(...args),
-  deleteMeeting: (...args: unknown[]) => mockDeleteMeeting(...args),
-  getMeeting: (...args: unknown[]) => mockGetMeeting(...args),
-  getTranscript: (...args: unknown[]) => mockGetTranscript(...args),
-  getAudio: (...args: unknown[]) => mockGetAudio(...args),
-}));
+vi.mock('@/lib/storage/audio', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/storage/audio')>();
+  return { ...real, saveAudio: (...args: unknown[]) => mockSaveAudio(...args) };
+});
 
 // ── Diarization mocks ──────────────────────────────────────────────────────
 
@@ -81,8 +80,8 @@ vi.mock('@/lib/audio/recording-format', () => ({
 
 // ── VAD batch mock ─────────────────────────────────────────────────────────
 
-// sealCurrentBatch always pushes one fake batch so stopAndSave's liveBatches
-// is non-empty and can resolve the fetch-based transcript path.
+// sealCurrentBatch always pushes one fake batch, so stopping always has one batch
+// to send even though no real speech was captured.
 const FAKE_BATCH = {
   wav: new Blob(['fakewav'], { type: 'audio/wav' }),
   intervals: [{ originalStart: 0, originalEnd: 5, wavOffset: 0, wavDuration: 5 }],
@@ -98,12 +97,10 @@ vi.mock('@/lib/audio/vad-batch', () => ({
     readyBatches: [],
   })),
   sealCurrentBatch: vi.fn((state: { readyBatches: unknown[] }) => {
-    // Inject a fake sealed batch so the post-recording transcript fan-out has work to do
     state.readyBatches.push(FAKE_BATCH);
   }),
-  splitTextWithIntervals: vi.fn((_text: string) => [
-    { speaker: '—', start: 0, end: 5, text: 'Hej verden' },
-  ]),
+  splitTextWithIntervals: vi.fn((text: string) =>
+    text.trim() ? [{ speaker: '—', start: 0, end: 5, text: 'Hej verden' }] : []),
   BATCH_DURATION_S: 27,
   MAX_WORDS_PER_LINE: 20,
 }));
@@ -119,6 +116,21 @@ vi.mock('@ricky0123/vad-web', () => ({
     }),
   },
 }));
+
+// The callbacks the screen handed the VAD on its last start, to simulate speech.
+function vadCallbacks() {
+  const options = vi.mocked(MicVAD.new).mock.calls.at(-1)?.[0];
+  if (!options?.onSpeechStart || !options.onSpeechEnd) throw new Error('VAD was not started');
+  return { onSpeechStart: options.onSpeechStart, onSpeechEnd: options.onSpeechEnd };
+}
+
+async function speak(seconds = 1) {
+  const { onSpeechStart, onSpeechEnd } = vadCallbacks();
+  await act(async () => {
+    await onSpeechStart();
+    await onSpeechEnd(new Float32Array(16_000 * seconds));
+  });
+}
 
 // ── Browser media API mocks ────────────────────────────────────────────────
 
@@ -201,23 +213,48 @@ class FakeMediaStream {
   getTracks() { return this._tracks; }
 }
 
-beforeEach(() => {
+// ── Network ────────────────────────────────────────────────────────────────
+
+// fetch for the current test's meeting. A batch queue outlives its screen (by
+// design), so a meeting from an earlier test may still retry; those requests are
+// left hanging instead of reaching this test's mock.
+const fetchMock = vi.fn();
+let meetingId: string;
+vi.stubGlobal('fetch', (url: string, init?: RequestInit) =>
+  String(url).includes(meetingId) ? fetchMock(url, init) : new Promise(() => {}));
+
+const ok = (text = 'Hej verden') => ({ ok: true, status: 200, json: async () => ({ text }) });
+const serverError = () => ({ ok: false, status: 502, json: async () => ({ error: 'Transcription failed' }) });
+// Batch requests, as opposed to live-caption requests to the same route.
+const batchRequests = () => fetchMock.mock.calls.filter(([, init]) =>
+  ((init as RequestInit).body as FormData).get('audio') instanceof File &&
+  (((init as RequestInit).body as FormData).get('audio') as File).name === 'batch.wav');
+
+let browserOnline = true;
+Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => browserOnline });
+
+function setOnline(online: boolean) {
+  browserOnline = online;
+  act(() => { window.dispatchEvent(new Event(online ? 'online' : 'offline')); });
+}
+
+beforeEach(async () => {
   latestRecorder = null;
+  setStorageUserId(crypto.randomUUID());
+  meetingId = (await createMeeting({ title: 'Møde' })).id;
+  // Back online, with the failure count connectivity keeps across tests cleared.
+  setOnline(true);
 
   // Reset all mocks
   mockPush.mockReset();
   mockReplace.mockReset();
   mockSearchParamsGet.mockReturnValue(null);
-  mockSaveAudio.mockResolvedValue(undefined);
-  mockSaveTranscript.mockResolvedValue(undefined);
-  mockUpdateMeeting.mockResolvedValue(undefined);
-  mockDeleteMeeting.mockResolvedValue(undefined);
-  mockGetMeeting.mockResolvedValue(null);
-  mockGetTranscript.mockResolvedValue(null);
-  mockGetAudio.mockResolvedValue(null);
+  mockSaveAudio.mockReset().mockResolvedValue(undefined);
   mockStartDiarization.mockResolvedValue([]);
   mockFinishDiarization.mockResolvedValue(undefined);
   mockPickRecordingMimeType.mockReturnValue('audio/webm;codecs=opus');
+  fetchMock.mockReset().mockResolvedValue(ok());
+  vi.mocked(MicVAD.new).mockClear();
 
   // Install browser API stubs
   Object.defineProperty(window, 'MediaRecorder', {
@@ -246,21 +283,15 @@ beforeEach(() => {
   });
 
   // requestAnimationFrame / cancelAnimationFrame stubs
-  vi.stubGlobal('requestAnimationFrame', vi.fn((cb: FrameRequestCallback) => {
-    // Don't call continuously — just return an id
-    return 0 as unknown as number;
-  }));
+  vi.stubGlobal('requestAnimationFrame', vi.fn(() => 0));
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
-
-  // fetch mock — return empty transcript by default
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({ text: 'Hej verden' }),
-  }));
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+afterAll(() => {
   vi.unstubAllGlobals();
 });
 
@@ -269,7 +300,7 @@ afterEach(() => {
 function renderScreen(props: Partial<React.ComponentProps<typeof RecordingScreen>> = {}) {
   return render(
     <RecordingScreen
-      meetingId="meeting-abc"
+      meetingId={meetingId}
       {...props}
     />,
   );
@@ -384,15 +415,17 @@ describe('RecordingScreen — existingRecording state', () => {
     });
   });
 
-  it('calls updateMeeting and startRecording on confirm overwrite', async () => {
+  it('puts the meeting back to recording and starts on confirm overwrite', async () => {
+    await updateMeeting(meetingId, { status: 'review' });
     renderScreen({ existingRecording });
     fireEvent.click(screen.getByText('optag igen'));
     await waitFor(() => screen.getByText('Optag igen?'));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Ja, optag igen' }));
     });
-    await waitFor(() => {
-      expect(mockUpdateMeeting).toHaveBeenCalledWith('meeting-abc', expect.objectContaining({ status: 'recording' }));
+    await waitFor(async () => {
+      expect((await getMeeting(meetingId))?.status).toBe('recording');
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled();
     });
   });
 });
@@ -414,7 +447,7 @@ describe('RecordingScreen — autostart behaviour', () => {
     mockSearchParamsGet.mockImplementation((key: string) => key === 'autostart' ? '1' : null);
     renderScreen();
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/meeting/meeting-abc', expect.anything());
+      expect(mockReplace).toHaveBeenCalledWith(`/meeting/${meetingId}`, expect.anything());
     });
   });
 
@@ -569,15 +602,15 @@ describe('RecordingScreen — cancel / discard flow', () => {
     });
   });
 
-  it('calls deleteMeeting when "Slet og annullér" is confirmed', async () => {
+  it('deletes the meeting when "Slet og annullér" is confirmed', async () => {
     renderScreen();
     fireEvent.click(screen.getByText('annullér'));
     await waitFor(() => screen.getByText('Annullér optagelse?'));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Slet og annullér' }));
     });
-    await waitFor(() => {
-      expect(mockDeleteMeeting).toHaveBeenCalledWith('meeting-abc');
+    await waitFor(async () => {
+      expect(await getMeeting(meetingId)).toBeNull();
     });
   });
 
@@ -613,143 +646,141 @@ describe('RecordingScreen — cancel / discard flow', () => {
 // ══════════════════════════════════════════════════════════════════════════
 
 describe('RecordingScreen — stopAndSave', () => {
-  async function startAndStop() {
+  async function start() {
     renderScreen();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
     });
     await waitFor(() => screen.getByText(/gem.*fortsæt/i));
+  }
+
+  async function stop() {
     await act(async () => {
       fireEvent.click(screen.getByText(/gem.*fortsæt/i));
     });
   }
 
-  it('calls saveTranscript when transcription succeeds', async () => {
-    // Provide a non-empty text so the empty-transcript branch is skipped
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej verden' }),
-    });
+  async function startAndStop() {
+    await start();
+    await stop();
+  }
+
+  it('saves the transcript when transcription succeeds', async () => {
     await startAndStop();
-    await waitFor(() => {
-      expect(mockSaveTranscript).toHaveBeenCalled();
+    await waitFor(async () => {
+      expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Hej verden']);
     }, { timeout: 5000 });
   });
 
-  it('calls updateMeeting with status "review" after transcription', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej verden' }),
-    });
+  it('moves the meeting to review after transcription', async () => {
     await startAndStop();
-    await waitFor(() => {
-      expect(mockUpdateMeeting).toHaveBeenCalledWith('meeting-abc', expect.objectContaining({ status: 'review' }));
+    await waitFor(async () => {
+      expect((await getMeeting(meetingId))?.status).toBe('review');
     }, { timeout: 5000 });
   });
 
   it('calls startDiarization when stopping', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej' }),
-    });
     await startAndStop();
     await waitFor(() => {
-      expect(mockStartDiarization).toHaveBeenCalledWith('meeting-abc', expect.any(Blob));
+      expect(mockStartDiarization).toHaveBeenCalledWith(meetingId, expect.any(Blob));
     }, { timeout: 5000 });
   });
 
   it('navigates to /meeting/:id/review after successful save', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej' }),
-    });
     await startAndStop();
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith('/meeting/meeting-abc/review');
+      expect(mockPush).toHaveBeenCalledWith(`/meeting/${meetingId}/review`);
     }, { timeout: 5000 });
   });
 
-  it('shows uploading/transcribing state after stop', async () => {
-    // Make fetch hang to catch the in-between state
-    type Resolver = () => void;
-    let resolveFetch: Resolver | null = null;
-    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
-      () => new Promise<Response>((r) => {
-        resolveFetch = () => r({ ok: true, json: async () => ({ text: 'hej' }) } as Response);
-      }),
-    );
-    renderScreen();
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
-    });
-    await waitFor(() => screen.getByText(/gem.*fortsæt/i));
-    await act(async () => {
-      fireEvent.click(screen.getByText(/gem.*fortsæt/i));
-    });
-    // The uploading/transcribing state: either "transskriberer og gemmer" (no batch progress)
-    // or "transskriberer N / M segmenter" (with batch progress)
+  it('shows the transcription progress after stop', async () => {
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    await startAndStop();
     await waitFor(() => {
-      const body = document.body.textContent ?? '';
-      expect(
-        body.includes('transskriberer') || body.includes('gem & fortsæt') === false,
-      ).toBe(true);
+      expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
     });
-    // Ensure we're no longer showing the "gem & fortsæt" button (stopped state)
-    await waitFor(() => {
-      expect(screen.queryByText(/gem.*fortsæt/i)).toBeNull();
-    });
-    // Clean up by resolving the fetch
-    await act(async () => { resolveFetch?.(); });
+    expect(screen.queryByText(/gem.*fortsæt/i)).toBeNull();
   });
 
   it('shows error when no speech is found (empty transcript)', async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: '' }),
-    });
+    fetchMock.mockResolvedValue(ok(''));
     await startAndStop();
     await waitFor(() => {
       expect(screen.getByText(/Ingen tale fundet/)).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
-  it('does NOT save the recording when no transcript is produced', async () => {
-    // A recording that yields no transcript must be discarded — nothing should be
-    // persisted to IndexedDB outside the successful review flow.
-    mockSaveAudio.mockClear();
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: '' }),
-    });
+  it('keeps nothing when no speech is found', async () => {
+    fetchMock.mockResolvedValue(ok(''));
     await startAndStop();
     await waitFor(() => {
-      expect(screen.getByText(/Ingen tale fundet|fejlede/i)).toBeInTheDocument();
+      expect(screen.getByText(/Ingen tale fundet/)).toBeInTheDocument();
     }, { timeout: 5000 });
     expect(mockSaveAudio).not.toHaveBeenCalled();
+    expect(await getMeeting(meetingId)).toBeNull();
   });
 
   it('calls onRecordingComplete after successful save', async () => {
     const onRecordingComplete = vi.fn();
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej verden' }),
-    });
-    render(
-      <RecordingScreen
-        meetingId="meeting-abc"
-        onRecordingComplete={onRecordingComplete}
-      />,
-    );
+    renderScreen({ onRecordingComplete });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
     });
     await waitFor(() => screen.getByText(/gem.*fortsæt/i));
-    await act(async () => {
-      fireEvent.click(screen.getByText(/gem.*fortsæt/i));
-    });
+    await stop();
     await waitFor(() => {
       expect(onRecordingComplete).toHaveBeenCalled();
     }, { timeout: 5000 });
+  });
+
+  // Regression: a batch got one retry at stop and was then dropped from the transcript.
+  it('keeps a batch that fails twice and puts it in the transcript once it succeeds', async () => {
+    fetchMock
+      .mockResolvedValueOnce(serverError())
+      .mockResolvedValueOnce(serverError())
+      .mockResolvedValue(ok());
+    await startAndStop();
+
+    // Each failure is counted in the ledger once the retry is scheduled; the browser's
+    // online event then retries at once instead of after the backoff.
+    const attempts = async () => (await listBatches(meetingId))[0]?.attempts;
+    await waitFor(async () => expect(await attempts()).toBe(1));
+    expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
+    setOnline(true);
+    await waitFor(async () => expect(await attempts()).toBe(2));
+    setOnline(true);
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(`/meeting/${meetingId}/review`);
+    }, { timeout: 5000 });
+    expect(batchRequests()).toHaveLength(3);
+    expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Hej verden']);
+  });
+
+  // Regression: a recording whose batches all failed was discarded ("ikke gemt").
+  it('keeps the recording waiting for transcription when every batch fails', async () => {
+    fetchMock.mockResolvedValue(serverError());
+    await startAndStop();
+
+    await waitFor(async () => {
+      expect((await getMeeting(meetingId))?.status).toBe('processing');
+    }, { timeout: 5000 });
+    expect(await getPendingAudio(meetingId, 0)).not.toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
+    expect(screen.queryByText(/ikke gemt/)).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('tells the user what happens to the waiting parts when stopping offline', async () => {
+    await start();
+    setOnline(false);
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    await stop();
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 af 1 dele er endnu ikke transskriberet/)).toBeInTheDocument();
+    });
+    expect((await getMeeting(meetingId))?.status).toBe('processing');
   });
 });
 
@@ -1049,14 +1080,7 @@ describe('RecordingScreen — recorder.onerror surfaces to the UI (HIGH)', () =>
 });
 
 describe('RecordingScreen — archivePromise failure surfaced to user (MEDIUM)', () => {
-  it('shows warning message when saveAudio fails but transcript saved OK', async () => {
-    // saveAudio rejects; saveTranscript succeeds so the transcription path completes.
-    mockSaveAudio.mockRejectedValue(new Error('QuotaExceededError'));
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej verden' }),
-    });
-
+  async function startAndStop() {
     renderScreen();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
@@ -1065,22 +1089,180 @@ describe('RecordingScreen — archivePromise failure surfaced to user (MEDIUM)',
     await act(async () => {
       fireEvent.click(screen.getByText(/gem.*fortsæt/i));
     });
+  }
+
+  it('shows warning message when saveAudio fails but transcript saved OK', async () => {
+    mockSaveAudio.mockRejectedValue(new Error('QuotaExceededError'));
+    await startAndStop();
 
     await waitFor(() => {
       expect(screen.getByText(/lydfilen kunne ikke gemmes lokalt/)).toBeInTheDocument();
     }, { timeout: 5000 });
+    expect(await getTranscript(meetingId)).not.toBeNull();
   });
 
   it('does NOT navigate to review when archive fails', async () => {
     mockSaveAudio.mockRejectedValue(new Error('QuotaExceededError'));
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ text: 'Hej verden' }),
-    });
+    await startAndStop();
 
-    renderScreen();
+    await waitFor(() => {
+      expect(screen.getByText(/lydfilen kunne ikke gemmes lokalt/)).toBeInTheDocument();
+    }, { timeout: 5000 });
+    expect(mockPush).not.toHaveBeenCalledWith(`/meeting/${meetingId}/review`);
+  });
+});
+
+describe('RecordingScreen — offline and start-up failures', () => {
+  async function start() {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+  }
+
+  it('refuses to start while offline', async () => {
+    setOnline(false);
+    renderScreen();
+    await start();
+
+    expect(screen.getByText(/kan ikke starte uden forbindelse/)).toBeInTheDocument();
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('aborts the start and releases the microphone when the VAD cannot start', async () => {
+    const stream = new FakeMediaStream();
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValueOnce(stream as unknown as MediaStream);
+    vi.mocked(MicVAD.new).mockRejectedValueOnce(new Error('onnx runtime failed to load'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderScreen();
+    await start();
+
+    expect(screen.getByText(/talegenkendelsen ikke kunne indlæses/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(latestRecorder).toBeNull();
+    expect(stream.getTracks()[0].stop).toHaveBeenCalled();
+  });
+
+  it('keeps recording but pauses live captions while offline', async () => {
+    renderScreen();
+    await start();
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+
+    await speak();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the caption request
+
+    fetchMock.mockClear();
+    setOnline(false);
+    expect(screen.getByText(/Optagelsen fortsætter, og live-transskriptionen er sat på pause/)).toBeInTheDocument();
+    await speak();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+    expect(latestRecorder?.state).toBe('recording');
+  });
+
+  it('checkpoints the batch being recorded after each utterance', async () => {
+    renderScreen();
+    await start();
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+
+    await speak(2);
+
+    await waitFor(async () => {
+      expect(await listBatches(meetingId)).toMatchObject([
+        { seq: 0, status: 'open', totalWavDuration: 2 },
+      ]);
+    });
+    expect(await getPendingAudio(meetingId, 0)).not.toBeNull();
+  });
+
+  it('asks before leaving only while recording', async () => {
+    renderScreen();
+    expect(isLeaveGuarded()).toBe(false);
+    await start();
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    expect(isLeaveGuarded()).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/gem.*fortsæt/i));
+    });
+    expect(isLeaveGuarded()).toBe(false);
+  });
+
+  it('keeps what was recorded when the screen is left mid-recording', async () => {
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    const { unmount } = renderScreen();
+    await start();
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+
+    unmount();
+
+    expect(isLeaveGuarded()).toBe(false);
+    await waitFor(async () => {
+      expect((await listBatches(meetingId)).map((r) => r.status)).toEqual(['pending']);
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await getMeeting(meetingId)).toMatchObject({ status: 'recording' });
+  });
+
+  it('still removes an abandoned recording that captured nothing', async () => {
+    const { unmount } = renderScreen();
+    unmount();
+
+    await waitFor(async () => {
+      expect(await getMeeting(meetingId)).toBeNull();
+    });
+  });
+});
+
+describe('RecordingScreen — interrupted recording', () => {
+  // The first session reached 01:05 on the meeting's timeline and was transcribed.
+  async function interruptedAt65s() {
+    await putBatch({
+      meetingId, seq: 0, session: 0, status: 'pending', totalWavDuration: 5,
+      intervals: [{ originalStart: 60, originalEnd: 65, wavOffset: 0, wavDuration: 5 }],
+    }, new ArrayBuffer(8));
+    await completeBatch(meetingId, 0, [{ speaker: 'Taler 1', start: 60, end: 65, text: 'Tidligere tekst' }]);
+  }
+
+  it('offers to resume, finish or delete instead of redirecting', async () => {
+    await interruptedAt65s();
+    renderScreen({ isActiveRecording: true });
+
+    expect(await screen.findByText(/optagelsen blev afbrudt/i)).toBeInTheDocument();
+    expect(screen.getByText('01:05')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'fortsæt optagelse' })).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('resumes with the earlier text, the clock going on and the next batch numbers', async () => {
+    await interruptedAt65s();
+    renderScreen({ isActiveRecording: true });
+    const button = await screen.findByRole('button', { name: 'fortsæt optagelse' });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+
+    // The live view renders each word in its own span.
+    expect(screen.getByText('Tidligere').parentElement).toHaveTextContent('Tidligere tekst');
+    expect(screen.getByText(/^00:01:0[5-6]$/)).toBeInTheDocument();
+    await speak(2);
+    await waitFor(async () => {
+      expect((await listBatches(meetingId)).map(({ seq, session, status }) => ({ seq, session, status }))).toEqual([
+        { seq: 0, session: 0, status: 'done' },
+        { seq: 1, session: 1, status: 'open' },
+      ]);
+    });
+    const [interval] = (await listBatches(meetingId))[1].intervals;
+    expect(interval.originalStart).toBeGreaterThanOrEqual(65);
+  });
+
+  it('diarizes only the resumed session and keeps no audio when stopped', async () => {
+    await interruptedAt65s();
+    renderScreen({ isActiveRecording: true });
+    const button = await screen.findByRole('button', { name: 'fortsæt optagelse' });
+    await act(async () => {
+      fireEvent.click(button);
     });
     await waitFor(() => screen.getByText(/gem.*fortsæt/i));
     await act(async () => {
@@ -1088,9 +1270,66 @@ describe('RecordingScreen — archivePromise failure surfaced to user (MEDIUM)',
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/lydfilen kunne ikke gemmes lokalt/)).toBeInTheDocument();
+      expect(mockPush).toHaveBeenCalledWith(`/meeting/${meetingId}/review`);
     }, { timeout: 5000 });
-    expect(mockPush).not.toHaveBeenCalledWith('/meeting/meeting-abc/review');
+    await waitFor(() => expect(mockFinishDiarization).toHaveBeenCalledWith(meetingId, [], 65));
+    expect(mockSaveAudio).not.toHaveBeenCalled();
+    expect(await getMeeting(meetingId)).toMatchObject({ status: 'review', audioDeleted: true });
+    expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Tidligere tekst', 'Hej verden']);
+  });
+
+  it('finishes into the transcript and goes to review', async () => {
+    await interruptedAt65s();
+    renderScreen({ isActiveRecording: true });
+    const button = await screen.findByRole('button', { name: 'afslut og gå til gennemgang →' });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(`/meeting/${meetingId}/review`);
+    });
+    expect(await getTranscript(meetingId)).toMatchObject({
+      segments: [{ text: 'Tidligere tekst' }],
+      diarizationStatus: 'done',
+    });
+    expect(await getMeeting(meetingId)).toMatchObject({ status: 'review', audioDeleted: true });
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('deletes the meeting on request', async () => {
+    await interruptedAt65s();
+    renderScreen({ isActiveRecording: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'slet' }));
+    const button = await screen.findByRole('button', { name: 'Slet og annullér' });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(await getMeeting(meetingId)).toBeNull();
+    expect(mockPush).toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('shows the waiting panel for a stopped recording still waiting for transcription', async () => {
+    let answer: (value: ReturnType<typeof ok>) => void = () => {};
+    fetchMock.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    await putBatch({
+      meetingId, seq: 0, session: 0, status: 'pending', totalWavDuration: 5,
+      intervals: [{ originalStart: 0, originalEnd: 5, wavOffset: 0, wavDuration: 5 }],
+    }, new ArrayBuffer(8));
+    await updateMeeting(meetingId, { status: 'processing' });
+    renderScreen();
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
+    });
+    expect(screen.queryByRole('button', { name: 'Start optagelse' })).toBeNull();
+
+    await act(async () => { answer(ok()); });
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(`/meeting/${meetingId}/review`);
+    });
+    expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Hej verden']);
   });
 });
 

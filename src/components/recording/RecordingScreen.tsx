@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,20 +12,27 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { VolumeBar } from './VolumeBar';
+import { WaitingForTranscriptionPanel } from './WaitingForTranscriptionPanel';
+import { InterruptedRecordingPanel } from './InterruptedRecordingPanel';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
-import type { TranscriptSegment } from '@/types';
-import { saveAudio, saveTranscript, updateMeeting, deleteMeeting, getMeeting, getTranscript, getAudio } from '@/lib/storage';
+import {
+  saveAudio, updateMeeting, deleteMeeting, getMeeting, getTranscript, getAudio,
+  getRecordingSummary, listBatches, finalizeRecordingToTranscript,
+} from '@/lib/storage';
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch,
-  splitTextWithIntervals,
   BATCH_DURATION_S, MAX_WORDS_PER_LINE,
-  type ReadyBatch, type VadBatchState,
+  type VadBatchState,
 } from '@/lib/audio/vad-batch';
+import { getBatchQueue } from '@/lib/recording/batch-queue';
+import { connectivity, useConnectivity } from '@/lib/recording/connectivity';
+import { setLeaveGuard } from '@/lib/recording/leave-guard';
+import { finishRecording } from '@/lib/recording/finish';
 
 // ── PCM live-transcription helpers ───────────────────────────────────────────
 
@@ -86,6 +93,10 @@ function encodePcmToWav(frames: Int16Array[]): Blob {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
+// The VAD's model and runtime load from the server. Without the VAD nothing is cut
+// into batches, so a recording started without it would yield no transcript at all.
+class VadUnavailableError extends Error {}
+
 interface LiveSegment {
   speaker: string;
   start: number;
@@ -96,6 +107,9 @@ interface LiveSegment {
   waveIntervalMs: number;
 }
 
+// What the ledger says about an interrupted recording, which resuming continues.
+type RecordingSummary = NonNullable<Awaited<ReturnType<typeof getRecordingSummary>>>;
+
 interface ClarificationItem {
   question: string;
   context?: string;
@@ -105,8 +119,10 @@ interface RecordingScreenProps {
   meetingId: string;
   existingRecording?: { durationSeconds: number | null; sizeBytes: number };
   // True when this is a live, in-progress recording session (meeting status
-  // 'recording'). A hard refresh of such a session loses the in-memory recording,
-  // so we send the user to the dashboard rather than auto-starting a new one.
+  // 'recording'). A hard refresh of such a session loses the in-memory recording.
+  // When the ledger holds its batches the screen offers to resume or finish it;
+  // with no rows there is nothing to resume, so we send the user to the dashboard
+  // rather than auto-starting a new one.
   isActiveRecording?: boolean;
   onNavigateToReview?: () => void;
   onRecordingComplete?: () => void;
@@ -136,14 +152,11 @@ const WORDS_PER_SECOND = 10;
 // Slower wave rate for the continuous live wave (interim → final carry-over).
 // Must be slow enough that the wave is visibly in-progress when interim text first appears.
 const LIVE_WAVE_INTERVAL_MS = 300;
-// Max concurrent batch uploads while still recording. Batches seal every ~27 s of
-// speech, so 1 in flight is the steady state; 2 absorbs bursts without starving
-// the live-caption requests.
-const MAX_LIVE_BATCH_UPLOADS = 2;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
 const CLARIFY_TICK_MS = 250;
+const SAVED_RECORDING_UNREADABLE = 'Den gemte optagelse kunne ikke indlæses. Genindlæs siden, og prøv igen.';
 
 export function RecordingScreen({ meetingId, existingRecording, isActiveRecording, onNavigateToReview, onRecordingComplete }: RecordingScreenProps) {
   const router = useRouter();
@@ -158,13 +171,19 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [batchProgress, setBatchProgress] = useState<{
-    completed: number; total: number;
-    completedSeconds: number; totalSeconds: number;
-  } | null>(null);
-  // True if VAD setup fails or utterance transcription errors out — the batch
-  // transcript still works, but the live interim captions won't show.
+  // Stopped, with batches the queue has not sent yet: the waiting panel shows.
+  const [waitingForQueue, setWaitingForQueue] = useState(false);
+  // Opened on a recording that was left mid-meeting; the screen offers to resume,
+  // finish or delete it until one is chosen.
+  const [interrupted, setInterrupted] = useState<RecordingSummary | null>(null);
+  // True when the transcription server keeps answering with no text — the batch
+  // transcript still works, but the live interim captions won't show. A lost
+  // connection is reported by connectivity instead.
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
+  const online = useConnectivity();
+  // One queue per meeting, outliving this screen; it owns sending the sealed batches.
+  const queue = getBatchQueue(meetingId);
+  const queueState = useSyncExternalStore(queue.subscribe, queue.getState, queue.getState);
   // True while a batch diarization pass is running (on pause) — the preview is
   // being repainted with authoritative speaker labels.
 
@@ -183,7 +202,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
-  // Silero VAD instance (created in startVAD, destroyed on stop/cancel).
+  // Silero VAD instance (created by loadVAD and assigned in startRecording,
+  // destroyed on stop/cancel).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
@@ -216,15 +236,24 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // VAD batch state for post-recording parallel transcription.
   const vadBatchStateRef = useRef<VadBatchState>(newVadBatchState());
-  // Batches already dispatched DURING recording (one entry per sealed batch, in
-  // readyBatches order). Sealed batches are transcribed while the meeting is still
-  // running, so stopping only waits for the final partial batch instead of starting
-  // the whole fan-out from zero. null result = failed; retried once at stop time.
-  const liveBatchesRef = useRef<Array<{ batch: ReadyBatch; promise: Promise<TranscriptSegment[] | null> }>>([]);
-  // Gate: at most 2 batch uploads in flight while recording, so they never starve
-  // the live-caption requests sharing the connection pool and the hviske server.
-  const liveBatchInFlightRef = useRef(0);
-  const liveBatchWaitersRef = useRef<Array<() => void>>([]);
+  // The seq the batch being recorded gets when it is sealed, which is also how many
+  // batches have been sealed so far.
+  const nextSeqRef = useRef(0);
+  // The ledger's session number for this recording: 0, then one more per resume.
+  const sessionRef = useRef(0);
+  // Where this session starts on the meeting's timeline when it resumed an
+  // interrupted recording. Its audio covers only this session, so it is diarized
+  // from here and not kept for playback.
+  const resumedAtRef = useRef<number | undefined>(undefined);
+  // Ledger writes (checkpoints and sealed batches) in the order they were made. Stop
+  // and unmount wait for it before reading the ledger.
+  const batchWritesRef = useRef<Promise<void>>(Promise.resolve());
+  // What saving needs once the queue has sent everything, possibly long after stop.
+  const stoppedRef = useRef<{
+    blob: Blob; mimeType: string; durationSeconds: number;
+    diarization: ReturnType<typeof startDiarization> | null;
+  } | null>(null);
+  const settlingRef = useRef(false);
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
   const pcmFramesRef = useRef<Int16Array[]>([]);
   // Frame index into pcmFramesRef where the current utterance started (with pre-roll).
@@ -274,8 +303,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   function resetLiveState() {
     vadBatchStateRef.current = newVadBatchState();
-    liveBatchesRef.current = [];
-    setBatchProgress(null);
+    nextSeqRef.current = 0;
     liveSegmentsRef.current = [];
     setLiveSegments([]);
     interimTextRef.current = '';
@@ -351,13 +379,13 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
   }
 
-  // Start Silero VAD on the given stream. Uses raw 16 kHz PCM frames from the AudioWorklet.
+  // Load Silero VAD on the given stream (started by the caller). Uses raw 16 kHz PCM frames from the AudioWorklet.
   //   • Partials every 700 ms: growing window (speechStart → now), capped at 15 s.
   //     Below the cap, LocalAgreementMerger locks in stable words across partials.
   //     Above the cap, a sliding 15 s window is used and the merger is bypassed.
   //   • Finalization on onSpeechEnd: sends the exact utterance audio, split into 15 s
   //     chunks when necessary so hviske never exceeds its 12 s server timeout.
-  async function startVAD(stream: MediaStream) {
+  async function loadVAD(stream: MediaStream) {
     try {
       const { MicVAD } = await import('@ricky0123/vad-web');
 
@@ -370,7 +398,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       }
 
       // POST a WAV blob to the utterance endpoint and return the transcribed text.
+      // Offline, live captions pause: nothing is sent and the text is empty.
       async function postWav(blob: Blob, externalSignal?: AbortSignal): Promise<string> {
+        if (!connectivity.isOnline()) return '';
         const formData = new FormData();
         formData.append('audio', blob, 'utterance.wav');
         const controller = new AbortController();
@@ -384,6 +414,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             body: formData,
             signal: controller.signal,
           });
+          connectivity.reportSuccess();
           if (res.ok) {
             const data = await res.json() as { text: string; latencyMs?: number };
             if (data.latencyMs != null) {
@@ -402,7 +433,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
         } catch (err) {
           if (err instanceof Error && err.name !== 'AbortError') {
             console.error('[vad] utterance transcription failed:', err);
-            setLiveCaptionsUnavailable(true);
+            connectivity.reportNetworkFailure();
           }
         } finally {
           clearTimeout(timeout);
@@ -458,11 +489,6 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             }
           }
 
-          // Feed THIS utterance to the post-recording batch transcript before
-          // draining the next queued one, so queued utterances are never dropped
-          // from the final transcript even though they appeared in live captions.
-          accumulateBatch(uStart, uEnd, audio);
-
           const next = pendingUtterancesRef.current.shift();
           if (next) {
             await finalize(next.start, next.end, next.audio, next.skip, next.windowStart, next.partialWords, next.speechEndMs, next.waveStartMs);
@@ -491,7 +517,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       function startPartialTimer() {
         if (partialTimerRef.current) return;
         partialTimerRef.current = setInterval(() => {
-          if (utteranceStartRef.current === null) return;
+          if (utteranceStartRef.current === null || !connectivity.isOnline()) return;
           const currentFrame = pcmFramesRef.current.length;
           const framesInWindow = currentFrame - windowStartFrameRef.current;
 
@@ -631,6 +657,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
           const capturedWaveStartMs = waveStartMsRef.current ?? capturedSpeechEndMs;
           utteranceStartRef.current = null;
           waveStartMsRef.current = null;
+          // Into the batch transcript first: it must not wait on, or depend on, the
+          // live caption below (queued behind another finalize, or paused offline).
+          accumulateBatch(uStart, uEnd, audio);
           // Keep interim text visible while the final transcription is in-flight so
           // there is no blank gap between partial display and committed segment arrival.
 
@@ -640,8 +669,6 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             return;
           }
 
-          // finalize() accumulates this utterance (and any it drains from the
-          // queue) into the batch state, so batch accumulation is NOT repeated here.
           await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart, capturedPartialWords, capturedSpeechEndMs, capturedWaveStartMs);
         },
         onVADMisfire: () => {
@@ -654,12 +681,10 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
           setInterimText('');
         },
       });
-      vadRef.current = vad;
-      vad.start();
-      setLiveCaptionsUnavailable(false);
+      return vad;
     } catch (err) {
-      console.error('[startVAD] setup failed:', err);
-      setLiveCaptionsUnavailable(true);
+      console.error('[loadVAD] setup failed:', err);
+      throw new VadUnavailableError();
     }
   }
 
@@ -676,7 +701,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   // ── Recording lifecycle ───────────────────────────────────────────────────────
 
   async function refreshClarifications() {
-    if (liveSegmentsRef.current.length === 0) return;
+    if (liveSegmentsRef.current.length === 0 || !connectivity.isOnline()) return;
     const text = liveSegmentsRef.current.map((s) => s.text).join(' ');
     try {
       const res = await fetch(`/api/meetings/${meetingId}/clarifications`, {
@@ -715,9 +740,23 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     clarifyTickRef.current = null;
   }
 
-  async function startRecording() {
+  async function startRecording(resume?: {
+    nextSeq: number; session: number; timelineEnd: number; earlier: LiveSegment[];
+  }) {
     setError(null);
+    // The VAD loads from the server, and a recording without it yields nothing.
+    if (!connectivity.isOnline()) {
+      setError('Optagelsen kan ikke starte uden forbindelse til serveren. Prøv igen, når du er online.');
+      return;
+    }
     resetLiveState();
+    sessionRef.current = resume?.session ?? 0;
+    resumedAtRef.current = resume?.timelineEnd;
+    if (resume) {
+      nextSeqRef.current = resume.nextSeq;
+      liveSegmentsRef.current = resume.earlier;
+      setLiveSegments(resume.earlier);
+    }
     // Tracked outside try so the catch can release it if setup fails after getUserMedia
     let stream: MediaStream | null = null;
     try {
@@ -767,6 +806,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
         analyserRef.current = null;
       }
 
+      vadRef.current = await loadVAD(stream);
+
       // Pick a mime type the browser can actually record (iOS Safari needs mp4,
       // not webm). Empty string → let MediaRecorder choose its own default.
       const mimeType = pickRecordingMimeType();
@@ -801,11 +842,14 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       };
 
       recorder.start(1000);
-      startTimeRef.current = Date.now();
+      // A resumed recording goes on from where the interrupted one reached, so its
+      // timestamps continue the meeting's timeline, as they do after a pause.
+      const resumedAt = resume?.timelineEnd ?? 0;
+      startTimeRef.current = Date.now() - resumedAt * 1000;
       pausedDurationRef.current = 0;
       recordingActiveRef.current = true;
       setRecordingState('recording');
-      setElapsed(0);
+      setElapsed(Math.floor(resumedAt));
 
       timerRef.current = setInterval(() => {
         setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
@@ -814,16 +858,22 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       animFrameRef.current = requestAnimationFrame(pollVolume);
       startClarifyTimer();
 
-      void startVAD(stream);
+      vadRef.current.start();
     } catch (err) {
       // Release the mic if we acquired it but failed during setup — otherwise it stays locked
       stream?.getTracks().forEach((t) => t.stop());
+      vadRef.current?.destroy();
+      vadRef.current = null;
+      pcmWorkletNodeRef.current?.disconnect();
+      pcmWorkletNodeRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
       analyserRef.current = null;
       console.error('[startRecording]', err);
 
-      if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+      if (err instanceof VadUnavailableError) {
+        setError('Optagelsen blev ikke startet, fordi talegenkendelsen ikke kunne indlæses. Genindlæs siden, og prøv igen.');
+      } else if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
         setError('Mikrofonens tilladelse er afvist. Tillad adgang i browserens adresselinje og prøv igen.');
       } else if (err instanceof DOMException && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')) {
         setError('Ingen mikrofon fundet. Er en mikrofon tilsluttet? På Mac: kør "sudo killall coreaudiod" i Terminal og prøv igen.');
@@ -882,22 +932,89 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   // Auto-start when navigated here from the home page record button. The
   // autostart flag is then stripped from the URL so a hard refresh doesn't start a
-  // brand-new recording. A refresh of a live recording (no flag, nothing to resume)
-  // can't recover the in-memory audio, so we send the user back to the dashboard.
+  // brand-new recording. Otherwise the ledger decides: rows on a `recording` meeting
+  // are an interrupted recording, offered for resuming; rows on a `processing` one
+  // are a stopped recording still waiting for transcription. A live recording that
+  // left no rows has nothing to resume, so we send the user back to the dashboard.
   const didAutostart = useRef(false);
   useEffect(() => {
     if (didAutostart.current) return;
+    didAutostart.current = true;
     if (existingRecording) return;
     if (searchParams.get('autostart') === '1') {
-      didAutostart.current = true;
+      // Autostart does not read the ledger: on a meeting with rows it would start over at seq 0 and write over them.
+      // shortcut: autostart skips the ledger, revisit if ?autostart=1 is ever used on anything but a brand-new meeting
       startRecording();
       router.replace(`/meeting/${meetingId}`, { scroll: false });
-    } else if (isActiveRecording) {
-      didAutostart.current = true;
-      router.replace('/dashboard');
+      return;
     }
+    void (async () => {
+      const [meeting, summary] = await Promise.all([getMeeting(meetingId), getRecordingSummary(meetingId)]);
+      if (summary) nextSeqRef.current = summary.nextSeq;
+      if (summary && meeting?.status === 'recording') setInterrupted(summary);
+      else if (summary && meeting?.status === 'processing') await finishWithoutAudio();
+      else if (isActiveRecording) router.replace('/dashboard');
+    })().catch((err: unknown) => {
+      console.error('[RecordingScreen] reading the recording ledger failed:', err);
+      setError(SAVED_RECORDING_UNREADABLE);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Continues an interrupted recording as a new session: the earlier text stays on
+  // screen, and batches the interruption left untranscribed are sent again.
+  async function resumeInterrupted(summary: RecordingSummary) {
+    let earlier: LiveSegment[];
+    try {
+      await queue.adoptPersisted();
+      earlier = (await listBatches(meetingId)).flatMap((batch) => batch.segments ?? []).map((segment) => ({
+        speaker: '—', start: segment.start, end: segment.end, text: segment.text,
+        // Already said, so shown at once rather than revealed word by word.
+        preRevealedWords: 0, waveElapsedAtCommitMs: 250, waveIntervalMs: 0,
+      }));
+    } catch (err) {
+      console.error('[RecordingScreen] loading the interrupted recording failed:', err);
+      setError(SAVED_RECORDING_UNREADABLE);
+      return;
+    }
+    await startRecording({
+      nextSeq: summary.nextSeq, session: summary.nextSession, timelineEnd: summary.timelineEnd, earlier,
+    });
+  }
+
+  // Finishes a recording that has no audio here to diarize or keep: an interrupted
+  // one finished without resuming, or a stopped one opened again while batches still
+  // wait. Once the queue has sent everything, the ledger becomes the transcript the
+  // way RecordingRecovery does it; finalizeRecordingToTranscript is idempotent, so
+  // both may do it.
+  async function finishWithoutAudio() {
+    if (settlingRef.current) return;
+    settlingRef.current = true;
+    setInterrupted(null);
+    setRecordingState('stopped');
+    setIsUploading(true);
+    try {
+      await queue.adoptPersisted();
+      if (queue.getState().waiting > 0) {
+        // shortcut: a reopened waiting recording shows no earlier text, revisit if users find the waiting screen confusing
+        await updateMeeting(meetingId, { status: 'processing' });
+        setWaitingForQueue(true);
+        return;
+      }
+      setWaitingForQueue(false);
+      // Written before the transcript moves the meeting to `review`.
+      await updateMeeting(meetingId, { audioDeleted: true });
+      await finalizeRecordingToTranscript(meetingId, { diarizationStatus: 'done' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Noget gik galt under transskription');
+      setIsUploading(false);
+      return;
+    } finally {
+      settlingRef.current = false;
+    }
+    onRecordingComplete?.();
+    router.push(`/meeting/${meetingId}/review`);
+  }
 
   function clearIntervals() {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -905,46 +1022,50 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     stopClarifyTimer();
   }
 
-  // ── Batch transcription, dispatched while still recording ────────────────────
+  // ── Batches: checkpointed while open, queued for transcription once sealed ────
 
-  async function postBatch(batch: ReadyBatch): Promise<TranscriptSegment[] | null> {
-    try {
-      const fd = new FormData();
-      fd.append('audio', batch.wav, 'batch.wav');
-      const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
-        method: 'POST',
-        body: fd,
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (!res.ok) return null;
-      const { text } = await res.json() as { text: string };
-      return text?.trim() ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration) : [];
-    } catch (err) {
-      console.error('[batch] transcription failed:', err);
-      return null;
+  function writeBatch(write: () => Promise<void>) {
+    // The queue reports its own write failures; what can fail here is reading the
+    // WAV out of its Blob, which loses that one batch. The chain must go on.
+    batchWritesRef.current = batchWritesRef.current.then(write).catch((err: unknown) => {
+      console.error('[batch] reading a sealed batch\'s audio failed, the batch is lost:', err);
+    });
+  }
+
+  // Hand every sealed batch to the queue, which stores it with its audio and sends it
+  // until it has its text, also after this screen is gone.
+  function enqueueSealedBatches() {
+    for (const batch of vadBatchStateRef.current.readyBatches.splice(0)) {
+      const seq = nextSeqRef.current++;
+      writeBatch(async () => queue.enqueue({
+        seq,
+        session: sessionRef.current,
+        wav: await batch.wav.arrayBuffer(),
+        intervals: batch.intervals,
+        totalWavDuration: batch.totalWavDuration,
+      }));
     }
   }
 
-  async function postBatchGated(batch: ReadyBatch): Promise<TranscriptSegment[] | null> {
-    while (liveBatchInFlightRef.current >= MAX_LIVE_BATCH_UPLOADS) {
-      await new Promise<void>((r) => liveBatchWaitersRef.current.push(r));
-    }
-    liveBatchInFlightRef.current++;
-    try {
-      return await postBatch(batch);
-    } finally {
-      liveBatchInFlightRef.current--;
-      // Wake everyone; they re-check the gate condition above.
-      liveBatchWaitersRef.current.splice(0).forEach((wake) => wake());
-    }
+  // Store the batch still being recorded, so a closed tab loses at most the
+  // utterance in progress.
+  function checkpointOpenBatch() {
+    const { pendingAudio, pendingIntervals, pendingWavDuration } = vadBatchStateRef.current;
+    if (pendingAudio.length === 0) return;
+    const samples = new Float32Array(pendingAudio.reduce((n, a) => n + a.length, 0));
+    let offset = 0;
+    for (const a of pendingAudio) { samples.set(a, offset); offset += a.length; }
+    const wav = float32ToWavBlob(samples);
+    const seq = nextSeqRef.current;
+    const intervals = [...pendingIntervals];
+    writeBatch(async () => queue.checkpoint({
+      seq, session: sessionRef.current, wav: await wav.arrayBuffer(), intervals, totalWavDuration: pendingWavDuration,
+    }));
   }
 
-  // Accumulate one finalized utterance into the post-recording batch transcript.
-  // Called for EVERY finalized utterance from finalize() — including ones drained
-  // from the pending queue under load — so the final transcript always matches the
-  // live captions. (Previously this lived only in the non-queued onSpeechEnd path,
-  // so utterances that queued while a finalize was in flight — common when a screen
-  // recorder saturates the CPU — were dropped from the final transcript.)
+  // Accumulate one finalized utterance into the batch transcript. Called for EVERY
+  // utterance the VAD ends, before its live caption is requested, so the final
+  // transcript never depends on the caption path (queued under load, or paused offline).
   function accumulateBatch(uStart: number, uEnd: number, audio: Float32Array) {
     const batchState = vadBatchStateRef.current;
     const wavOffset = batchState.pendingWavDuration;
@@ -954,20 +1075,38 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     batchState.pendingWavDuration += wavDuration;
     if (batchState.pendingWavDuration >= BATCH_DURATION_S) {
       sealCurrentBatch(batchState);
-      // Transcribe the sealed batch now, while the meeting is still running, so
-      // stopping only waits for the final partial batch.
-      dispatchSealedBatches();
+      enqueueSealedBatches();
+    } else {
+      checkpointOpenBatch();
     }
   }
 
-  // Fire transcription for any sealed-but-not-yet-dispatched batches. Idempotent —
-  // tracks how many of readyBatches already have an in-flight request.
-  function dispatchSealedBatches() {
-    const ready = vadBatchStateRef.current.readyBatches;
-    while (liveBatchesRef.current.length < ready.length) {
-      const batch = ready[liveBatchesRef.current.length];
-      liveBatchesRef.current.push({ batch, promise: postBatchGated(batch) });
+  // If we stopped (or left) MID-UTTERANCE, the VAD's onSpeechEnd never fired, so this
+  // utterance was shown live (via the window-commit path) but never added to the
+  // batch transcript. That's why a long, pause-free recording produced an empty
+  // final transcript while short clips (which end on a natural pause → onSpeechEnd)
+  // worked. Flush the in-progress utterance's raw PCM into the batch now, in
+  // <=BATCH_DURATION_S chunks so each stays within hviske's window.
+  function flushUtteranceInProgress() {
+    if (utteranceStartRef.current === null) return;
+    const startFrame = pcmSpeechStartFrameRef.current;
+    const int16Frames = pcmFramesRef.current.slice(startFrame);
+    const totalSamples = int16Frames.reduce((n, f) => n + f.length, 0);
+    if (totalSamples > 0) {
+      const uStart = utteranceStartRef.current;
+      const uEnd = currentElapsed();
+      const all = new Float32Array(totalSamples);
+      let off = 0;
+      for (const fr of int16Frames) { for (let i = 0; i < fr.length; i++) all[off++] = fr[i] / 32768; }
+      const samplesPerChunk = 16_000 * BATCH_DURATION_S;
+      for (let s = 0; s < all.length; s += samplesPerChunk) {
+        const chunk = all.slice(s, Math.min(s + samplesPerChunk, all.length));
+        const cStart = uStart + (s / all.length) * (uEnd - uStart);
+        const cEnd = uStart + ((s + chunk.length) / all.length) * (uEnd - uStart);
+        accumulateBatch(cStart, cEnd, chunk);
+      }
     }
+    utteranceStartRef.current = null;
   }
 
   async function stopAndSave() {
@@ -1016,121 +1155,69 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
-
     // Diarize the full recording in parallel with transcription, but DON'T block on
     // it — the transcript is saved and shown with default labels, and speaker labels
     // are patched in (and the review screen refreshed) when diarization lands.
-    const diarizationPromise = startDiarization(meetingId, blob);
+    // Offline, it is started once the transcript is saved.
+    stoppedRef.current = {
+      blob, mimeType, durationSeconds,
+      diarization: connectivity.isOnline() ? startDiarization(meetingId, blob) : null,
+    };
 
-    // Let any in-flight finalize drain its queued utterances into the batch state
-    // before sealing — otherwise utterances still being finalized when stop was
-    // pressed would miss the final batch (and a fast stop after speaking could seal
-    // an empty batch → "ingen tale fundet"). Bounded so a stuck finalize can't hang.
-    for (let i = 0; i < 60 && (finalizeInFlightRef.current || pendingUtterancesRef.current.length > 0); i++) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-
-    // If we stopped MID-UTTERANCE, the VAD's onSpeechEnd never fired, so this
-    // utterance was shown live (via the window-commit path) but never added to the
-    // batch transcript. That's why a long, pause-free recording produced an empty
-    // final transcript while short clips (which end on a natural pause → onSpeechEnd)
-    // worked. Flush the in-progress utterance's raw PCM into the batch now, in
-    // <=BATCH_DURATION_S chunks so each stays within hviske's window.
-    if (utteranceStartRef.current !== null) {
-      const startFrame = pcmSpeechStartFrameRef.current;
-      const int16Frames = pcmFramesRef.current.slice(startFrame);
-      const totalSamples = int16Frames.reduce((n, f) => n + f.length, 0);
-      if (totalSamples > 0) {
-        const uStart = utteranceStartRef.current;
-        const uEnd = currentElapsed();
-        const all = new Float32Array(totalSamples);
-        let off = 0;
-        for (const fr of int16Frames) { for (let i = 0; i < fr.length; i++) all[off++] = fr[i] / 32768; }
-        const samplesPerChunk = 16_000 * BATCH_DURATION_S;
-        for (let s = 0; s < all.length; s += samplesPerChunk) {
-          const chunk = all.slice(s, Math.min(s + samplesPerChunk, all.length));
-          const cStart = uStart + (s / all.length) * (uEnd - uStart);
-          const cEnd = uStart + ((s + chunk.length) / all.length) * (uEnd - uStart);
-          accumulateBatch(cStart, cEnd, chunk);
-        }
-      }
-      utteranceStartRef.current = null;
-    }
-
-    // Seal any remaining speech into the final partial batch and dispatch it.
-    // Earlier batches were already dispatched as they sealed during recording, so
-    // most of the fan-out is typically done (or in flight) by the time we get here.
+    // Seal the remaining speech into the final partial batch. Earlier batches were
+    // queued as they sealed, so most of them usually have their text already.
+    flushUtteranceInProgress();
     sealCurrentBatch(vadBatchStateRef.current);
-    dispatchSealedBatches();
-    const liveBatches = liveBatchesRef.current;
+    enqueueSealedBatches();
+    await batchWritesRef.current;
+    vadBatchStateRef.current = newVadBatchState();
 
-    // The recording is archived to IndexedDB only AFTER a transcript is produced
-    // (see below). A failed or empty transcription must not leave a saved meeting
-    // sitting in Arkiv with no referat and no way to act on it.
+    await settleStoppedRecording();
+  }
 
+  // Saves the stopped recording once every batch has its text. Until then the
+  // meeting is `processing` and the waiting panel shows; the effect below calls this
+  // again when the queue has sent everything, however long that takes.
+  async function settleStoppedRecording() {
+    const stopped = stoppedRef.current;
+    if (!stopped || settlingRef.current) return;
+    settlingRef.current = true;
+    const resumedAt = resumedAtRef.current;
     try {
-      // Await the in-flight batch requests (most resolved during recording) and
-      // give failed ones a single retry now that the live-caption traffic is gone.
-      const totalSeconds = liveBatches.reduce((s, e) => s + e.batch.totalWavDuration, 0);
-      setBatchProgress({ completed: 0, total: liveBatches.length, completedSeconds: 0, totalSeconds });
-      let done = 0;
-      let completedSeconds = 0;
-      let failedBatches = 0;
-      const segmentArrays = await Promise.all(liveBatches.map(async (entry): Promise<TranscriptSegment[]> => {
-        let segs = await entry.promise;
-        if (segs === null) segs = await postBatch(entry.batch);
-        if (segs === null) failedBatches++;
-        completedSeconds += entry.batch.totalWavDuration;
-        setBatchProgress({ completed: ++done, total: liveBatches.length, completedSeconds, totalSeconds });
-        return segs ?? [];
-      }));
-      const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
-      if (failedBatches > 0) {
-        console.error(`[transcribe] ${failedBatches}/${liveBatches.length} batches failed (speech service unreachable?)`);
-      }
-
-      if (segments.length === 0) {
-        // No transcript was produced — the speech service was unreachable, VAD
-        // never initialised, or the recording was genuinely silent. We have NOT
-        // archived the audio (that only happens on success below), so nothing is
-        // left saved: the recording is discarded and the user re-records. Surface
-        // a message that matches what actually happened — no false "retry" promise.
-        void diarizationPromise.catch(() => {});
-        setError(
-          liveCaptionsUnavailable
-            ? 'Transskription kunne ikke startes. Genindlæs siden (Cmd/Ctrl+Shift+R) og prøv igen.'
-            : failedBatches > 0
-              ? 'Transskriptionen fejlede — taletjenesten kunne ikke nås. Optagelsen blev ikke gemt. Prøv at optage igen.'
-              : 'Ingen tale fundet i optagelsen. Var mikrofonen aktiv og ikke slået fra?',
-        );
+      // Written before the transcript moves the meeting to `review`.
+      if (resumedAt !== undefined) await updateMeeting(meetingId, { audioDeleted: true });
+      const outcome = await finishRecording(meetingId);
+      setWaitingForQueue(outcome === 'waiting');
+      if (outcome === 'waiting') return;
+      stoppedRef.current = null;
+      if (outcome === 'empty') {
+        setError('Ingen tale fundet i optagelsen. Var mikrofonen aktiv og ikke slået fra?');
         setIsUploading(false);
-        setBatchProgress(null);
         return;
       }
-
-      const rawText = segments.map((s) => s.text).join(' ');
-      // Saved with default labels and diarizationStatus 'pending' — the review
-      // screen shows an uncertainty state for speakers until diarization lands.
-      await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [], diarizationStatus: 'pending' });
-      await updateMeeting(meetingId, { status: 'review' });
-
-      // Patch in speaker labels (and clear the pending state) once diarization finishes.
-      void diarizationPromise.then((turns) => finishDiarization(meetingId, turns));
+      // The transcript is saved with diarizationStatus 'pending'; patch in speaker
+      // labels (and clear the pending state) once diarization finishes.
+      void (stopped.diarization ?? startDiarization(meetingId, stopped.blob))
+        .then((turns) => finishDiarization(meetingId, turns, resumedAt));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt under transskription');
       setIsUploading(false);
-      setBatchProgress(null);
+      return;
+    } finally {
+      settlingRef.current = false;
+    }
+
+    // A resumed recording's earlier sessions have no audio left, so none is kept.
+    if (resumedAt !== undefined) {
+      onRecordingComplete?.();
+      router.push(`/meeting/${meetingId}/review`);
       return;
     }
 
-    // Release batch memory before navigating.
-    vadBatchStateRef.current = newVadBatchState();
-    liveBatchesRef.current = [];
-
     // Now that a transcript exists, archive the audio for playback during review.
     try {
-      await saveAudio(meetingId, blob, mimeType);
-      await updateMeeting(meetingId, { audioSizeBytes: blob.size, audioDurationSeconds: durationSeconds });
+      await saveAudio(meetingId, stopped.blob, stopped.mimeType);
+      await updateMeeting(meetingId, { audioSizeBytes: stopped.blob.size, audioDurationSeconds: stopped.durationSeconds });
     } catch (err) {
       // The transcript is already saved; only the audio archive failed (e.g. quota
       // exceeded or private-browsing). Warn so the user knows playback may not work,
@@ -1143,6 +1230,29 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     onRecordingComplete?.();
     router.push(`/meeting/${meetingId}/review`);
   }
+
+  useEffect(() => {
+    if (!waitingForQueue || queueState.waiting > 0) return;
+    void (stoppedRef.current ? settleStoppedRecording() : finishWithoutAudio());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingForQueue, queueState.waiting]);
+
+  // Leaving while recording interrupts it: the browser asks first, and so does the app's own navigation.
+  useEffect(() => {
+    setLeaveGuard(recordingState === 'recording' || recordingState === 'paused');
+  }, [recordingState]);
+
+  // A hidden tab may be closed or discarded without warning; store the open batch first.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && mediaRecorderRef.current?.state === 'recording') {
+        checkpointOpenBatch();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function confirmOverwrite() {
     setIsOverwriting(true);
@@ -1170,12 +1280,31 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
     }
+    // A batch write still in progress would otherwise put rows back after the delete.
+    await batchWritesRef.current;
     await deleteMeeting(meetingId);
     router.push('/dashboard');
   }
 
+  // Leaving mid-recording keeps what was recorded: the open batch, with the
+  // utterance in progress, is sealed and queued (the queue outlives this screen),
+  // and the meeting stays `recording` with ledger rows, i.e. interrupted. Only a
+  // recording that left nothing behind — no transcript, no saved audio and no
+  // ledger rows — is deleted, so it doesn't clutter the Arkiv. The async read also
+  // doubles as a StrictMode guard: dev's mount→cleanup→mount remounts before the
+  // read resolves, so instanceMountedRef is true again and we skip.
+  const instanceMountedRef = useRef(false);
   useEffect(() => {
+    instanceMountedRef.current = true;
     return () => {
+      instanceMountedRef.current = false;
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        flushUtteranceInProgress();
+        sealCurrentBatch(vadBatchStateRef.current);
+        enqueueSealedBatches();
+      }
+      setLeaveGuard(false);
       recordingActiveRef.current = false;
       clearIntervals();
       vadRef.current?.destroy();
@@ -1184,34 +1313,17 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       pcmWorkletNodeRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-      mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+      if (recorder && recorder.state !== 'inactive') recorder.stop();
+      recorder?.stream.getTracks().forEach((t) => t.stop());
       mediaRecorderRef.current = null;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // Remove an abandoned empty recording so it doesn't clutter the Arkiv: if the
-  // user leaves while the meeting is still an in-progress recording that produced
-  // nothing — no transcript and no saved audio — delete it on unmount. A real
-  // stop (stopAndSave) writes a transcript and flips the status to 'review' before
-  // navigating, and a failed stop still keeps its saved audio, so neither is
-  // matched here. The async read also doubles as a StrictMode guard: dev's
-  // mount→cleanup→mount remounts before the read resolves, so instanceMountedRef
-  // is true again and we skip.
-  const instanceMountedRef = useRef(false);
-  useEffect(() => {
-    instanceMountedRef.current = true;
-    return () => {
-      instanceMountedRef.current = false;
       void (async () => {
-        const [m, t, a] = await Promise.all([
-          getMeeting(meetingId), getTranscript(meetingId), getAudio(meetingId),
+        await batchWritesRef.current;
+        const [m, t, a, ledger] = await Promise.all([
+          getMeeting(meetingId), getTranscript(meetingId), getAudio(meetingId), getRecordingSummary(meetingId),
         ]);
         if (instanceMountedRef.current) return; // remounted (StrictMode) — not a real unmount
-        if (m && m.status === 'recording' && !t && !a) {
+        if (m && m.status === 'recording' && !t && !a && !ledger) {
           await deleteMeeting(meetingId).catch((err) => {
             console.error('[RecordingScreen] abandoned-meeting cleanup failed:', err);
           });
@@ -1228,6 +1340,48 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
   const showLivePanel = recordingState === 'recording' || recordingState === 'paused' || liveSegments.length > 0;
+
+  const cancelDialog = (
+    <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Annullér optagelse?</DialogTitle>
+          <DialogDescription>
+            Optagelsen og mødet slettes permanent. Denne handling kan ikke fortrydes.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="secondary" onClick={() => setShowCancelDialog(false)}>Tilbage</Button>
+          <Button variant="destructive" onClick={cancelRecording}>Slet og annullér</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  // ── Interrupted (reopened after leaving mid-recording) ───────────────────────
+  // Stays until a session has started, so a failed resume shows its error here.
+  if (interrupted && recordingState === 'idle') {
+    return (
+      <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: isMobile ? '24px 20px 24px' : '32px 48px 24px' }}>
+        <InterruptedRecordingPanel
+          savedSeconds={interrupted.timelineEnd}
+          onResume={() => void resumeInterrupted(interrupted)}
+          onFinish={() => void finishWithoutAudio()}
+          onDelete={() => setShowCancelDialog(true)}
+        />
+        {error && (
+          <div style={{
+            marginTop: 16, padding: '12px 16px', borderRadius: 'var(--radius)',
+            background: 'var(--kill-wash)', borderLeft: '3px solid var(--kill)',
+            fontSize: 13.5, color: 'var(--kill)',
+          }}>
+            {error}
+          </div>
+        )}
+        {cancelDialog}
+      </div>
+    );
+  }
 
   // ── Completed state (navigated back after recording) ─────────────────────────
   if (existingRecording && recordingState === 'idle') {
@@ -1358,8 +1512,20 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
         </div>
       )}
 
+      {/* Offline — recording continues, live captions wait for the connection */}
+      {!online && (recordingState === 'recording' || recordingState === 'paused') && (
+        <div role="status" style={{
+          marginTop: 16, padding: '10px 14px', borderRadius: 'var(--radius)',
+          borderLeft: '3px solid var(--accent)',
+          background: 'var(--accent-wash)',
+          fontSize: 13.5, color: 'var(--ink-2)',
+        }}>
+          Ingen forbindelse til serveren. Optagelsen fortsætter, og live-transskriptionen er sat på pause, indtil du er online igen.
+        </div>
+      )}
+
       {/* Live captions unavailable — recording still works */}
-      {liveCaptionsUnavailable && (recordingState === 'recording' || recordingState === 'paused') && (
+      {liveCaptionsUnavailable && online && (recordingState === 'recording' || recordingState === 'paused') && (
         <div style={{
           marginTop: 16, padding: '10px 14px', borderRadius: 'var(--radius)',
           borderLeft: '3px solid var(--accent)',
@@ -1586,7 +1752,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
           <>
             <OnboardingHint stepId="recording.start-button">
               <button
-                onClick={startRecording}
+                onClick={() => startRecording()}
                 style={{
                   width: 56, height: 56, borderRadius: 999,
                   background: 'var(--ink)', border: 'none', cursor: 'pointer',
@@ -1668,56 +1834,20 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
           </>
         )}
 
-        {(recordingState === 'stopped' || isUploading) && (() => {
-          const pct = batchProgress && batchProgress.totalSeconds > 0
-            ? Math.min(100, Math.round(batchProgress.completedSeconds / batchProgress.totalSeconds * 100))
-            : 0;
-          return (
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', width: '100%' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <span style={{
-                    display: 'inline-block', width: 11, height: 11, borderRadius: 999, flexShrink: 0,
-                    border: '2px solid var(--accent)', borderTopColor: 'transparent',
-                    animation: 'spin 0.8s linear infinite',
-                  }} />
-                  <span>
-                    {batchProgress && batchProgress.total > 0
-                      ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
-                      : 'transskriberer og gemmer…'}
-                  </span>
-                </div>
-                {batchProgress && batchProgress.total > 0 && (
-                  <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{pct}%</span>
-                )}
-              </div>
-              <div style={{ height: 3, borderRadius: 999, background: 'var(--line)', overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%', borderRadius: 999, background: 'var(--accent)',
-                  width: `${pct}%`,
-                  transition: 'width 0.5s ease-out',
-                }} />
-              </div>
-            </div>
-          );
-        })()}
+        {isUploading && (
+          <WaitingForTranscriptionPanel
+            total={nextSeqRef.current}
+            waiting={queueState.waiting}
+            online={online}
+            authRequired={queueState.authRequired}
+            persistFailed={queueState.persistFailed}
+            onRetry={() => void queue.adoptPersisted()}
+          />
+        )}
       </div>
 
       {/* Dialogs */}
-      <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Annullér optagelse?</DialogTitle>
-            <DialogDescription>
-              Optagelsen og mødet slettes permanent. Denne handling kan ikke fortrydes.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setShowCancelDialog(false)}>Tilbage</Button>
-            <Button variant="destructive" onClick={cancelRecording}>Slet og annullér</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {cancelDialog}
 
       <Dialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog}>
         <DialogContent>

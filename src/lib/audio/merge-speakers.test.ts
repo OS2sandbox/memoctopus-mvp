@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assignSpeakers } from './merge-speakers';
+import { assignSpeakers, assignSpeakersFrom } from './merge-speakers';
 import type { TranscriptSegment } from '@/types';
 import type { SpeakerTurn } from '@/lib/ai/diarization';
 
@@ -86,5 +86,26 @@ describe('assignSpeakers', () => {
     const turns: SpeakerTurn[] = [{ speaker: 'SPEAKER_03', start: 0, end: 2 }];
     assignSpeakers(segments, turns);
     expect(segments[0].speaker).toBe('Taler 1');
+  });
+});
+
+// A resumed recording is diarized from its last session only: that session's audio
+// starts at `offsetSeconds` on the meeting's timeline, and everything before it stays
+// the first speaker for the user to assign.
+describe('assignSpeakersFrom', () => {
+  const turns: SpeakerTurn[] = [
+    { speaker: 'SPEAKER_00', start: 0, end: 2 },
+    { speaker: 'SPEAKER_01', start: 2, end: 4 },
+  ];
+
+  it('labels only the segments from the offset on, numbering from Taler 2', () => {
+    const segments = [seg(0, 2), seg(5, 8), seg(10, 12), seg(12, 14)];
+    const result = assignSpeakersFrom(segments, turns, 10);
+    expect(result.map((s) => s.speaker)).toEqual(['Taler 1', 'Taler 1', 'Taler 2', 'Taler 3']);
+  });
+
+  it('returns segments unchanged when there are no turns', () => {
+    const segments = [seg(0, 2), seg(10, 12)];
+    expect(assignSpeakersFrom(segments, [], 10)).toEqual(segments);
   });
 });

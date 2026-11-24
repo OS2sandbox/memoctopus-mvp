@@ -1,5 +1,5 @@
 import type { SpeakerTurn } from '@/lib/ai/diarization';
-import { assignSpeakers } from './merge-speakers';
+import { assignSpeakers, assignSpeakersFrom } from './merge-speakers';
 import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
 import { getTranscript, saveTranscriptSegments } from '@/lib/storage';
 import { notifyTranscriptUpdated } from '@/lib/transcript-events';
@@ -65,8 +65,13 @@ export function startDiarization(meetingId: string, audio: Blob): Promise<Speake
 // ALWAYS clear the 'pending' status to 'done' so the review UI leaves the
 // uncertainty state even when diarization found nothing or failed. Notifies the
 // review screen and clears the in-flight marker. Re-reads current segments rather
-// than trusting a stale copy.
-export async function finishDiarization(meetingId: string, turns: SpeakerTurn[] | null): Promise<void> {
+// than trusting a stale copy. `offsetSeconds` is given for a resumed recording, whose
+// diarized audio is only its last session, starting there on the meeting's timeline.
+export async function finishDiarization(
+  meetingId: string,
+  turns: SpeakerTurn[] | null,
+  offsetSeconds?: number,
+): Promise<void> {
   // `null` means the diarization service couldn't be reached — mark 'failed' so the
   // review UI surfaces it; `[]` means it ran but found no turns (treated as 'done').
   const failed = turns === null;
@@ -94,7 +99,9 @@ export async function finishDiarization(meetingId: string, turns: SpeakerTurn[] 
       return;
     }
     const segments = (turns.length > 0 && current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL))
-      ? assignSpeakers(current.segments, turns)
+      ? (offsetSeconds === undefined
+        ? assignSpeakers(current.segments, turns)
+        : assignSpeakersFrom(current.segments, turns, offsetSeconds))
       : current.segments;
     await saveTranscriptSegments(meetingId, segments, 'done');
     notifyTranscriptUpdated(meetingId);

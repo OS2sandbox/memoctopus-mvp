@@ -27,13 +27,37 @@ export function assignSpeakers(
   segments: TranscriptSegment[],
   turns: SpeakerTurn[],
 ): TranscriptSegment[] {
+  return labelByTurns(segments, turns, 1);
+}
+
+// For a resumed recording, where only the last session's audio exists: `turns` are
+// timed from that session's start, which sits at `offsetSeconds` on the meeting's
+// timeline. Segments from the offset on are labelled from 'Taler 2', so none of them
+// is taken for the 'Taler 1' that every earlier segment keeps for the user to assign.
+export function assignSpeakersFrom(
+  segments: TranscriptSegment[],
+  turns: SpeakerTurn[],
+  offsetSeconds: number,
+): TranscriptSegment[] {
+  const inSession = (segment: TranscriptSegment) => segment.start >= offsetSeconds;
+  const shifted = turns.map((turn) => ({ ...turn, start: turn.start + offsetSeconds, end: turn.end + offsetSeconds }));
+  const labelled = labelByTurns(segments.filter(inSession), shifted, 2);
+  let next = 0;
+  return segments.map((segment) => (inSession(segment) ? labelled[next++] : segment));
+}
+
+function labelByTurns(
+  segments: TranscriptSegment[],
+  turns: SpeakerTurn[],
+  firstNumber: number,
+): TranscriptSegment[] {
   if (turns.length === 0) return segments;
 
   const labelMap = new Map<string, string>();
   const labelFor = (rawSpeaker: string): string => {
     let label = labelMap.get(rawSpeaker);
     if (!label) {
-      label = speakerLabel(labelMap.size + 1);
+      label = speakerLabel(labelMap.size + firstNumber);
       labelMap.set(rawSpeaker, label);
     }
     return label;

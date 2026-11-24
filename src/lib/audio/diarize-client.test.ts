@@ -157,6 +157,19 @@ describe('diarization lifecycle (start / finish / ensure)', () => {
     expect(mockSaveSegments).not.toHaveBeenCalled();
   });
 
+  it('finishDiarization with an offset labels only the resumed session, from Taler 2', async () => {
+    mockGetTranscript.mockResolvedValueOnce({
+      segments: [seg(0, 5), seg(20, 25), seg(25, 30)],
+      rawText: 'x x x',
+    });
+
+    await finishDiarization('m-resumed', TURNS, 20);
+
+    const [, savedSegments, status] = mockSaveSegments.mock.calls[0];
+    expect(savedSegments.map((s: { speaker: string }) => s.speaker)).toEqual(['Taler 1', 'Taler 2', 'Taler 3']);
+    expect(status).toBe('done');
+  });
+
   it('finishDiarization never clobbers manually relabelled speakers', async () => {
     const segs = [seg(0, 5, 'Anna'), seg(6, 10, 'Bo')];
     mockGetTranscript.mockResolvedValueOnce({ segments: segs, rawText: 'x x' });
