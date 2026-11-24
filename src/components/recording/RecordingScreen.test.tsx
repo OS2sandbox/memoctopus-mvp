@@ -716,7 +716,6 @@ describe('RecordingScreen — stopAndSave', () => {
     await waitFor(() => {
       expect(screen.getByText(/Ingen tale fundet/)).toBeInTheDocument();
     }, { timeout: 5000 });
-    expect(mockSaveAudio).not.toHaveBeenCalled();
     expect(await getMeeting(meetingId)).toBeNull();
   });
 
@@ -741,13 +740,11 @@ describe('RecordingScreen — stopAndSave', () => {
       .mockResolvedValue(ok());
     await startAndStop();
 
-    // Each failure is counted in the ledger once the retry is scheduled; the browser's
-    // online event then retries at once instead of after the backoff.
+    // Each failure is counted in the ledger once the retry is scheduled (stopping
+    // retries at once); the browser's online event then retries instead of the backoff.
     const attempts = async () => (await listBatches(meetingId))[0]?.attempts;
-    await waitFor(async () => expect(await attempts()).toBe(1));
-    expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
-    setOnline(true);
     await waitFor(async () => expect(await attempts()).toBe(2));
+    expect(screen.getByRole('status')).toHaveTextContent('transskriberer 0 / 1 dele…');
     setOnline(true);
 
     await waitFor(() => {
@@ -780,7 +777,8 @@ describe('RecordingScreen — stopAndSave', () => {
     await waitFor(() => {
       expect(screen.getByText(/1 af 1 dele er endnu ikke transskriberet/)).toBeInTheDocument();
     });
-    expect((await getMeeting(meetingId))?.status).toBe('processing');
+    // The panel shows the queue as soon as stopping starts; the status follows.
+    await waitFor(async () => expect((await getMeeting(meetingId))?.status).toBe('processing'));
   });
 });
 
@@ -1217,11 +1215,12 @@ describe('RecordingScreen — offline and start-up failures', () => {
 describe('RecordingScreen — interrupted recording', () => {
   // The first session reached 01:05 on the meeting's timeline and was transcribed.
   async function interruptedAt65s() {
-    await putBatch({
-      meetingId, seq: 0, session: 0, status: 'pending', totalWavDuration: 5,
+    const first = {
+      meetingId, seq: 0, session: 0, totalWavDuration: 5,
       intervals: [{ originalStart: 60, originalEnd: 65, wavOffset: 0, wavDuration: 5 }],
-    }, new ArrayBuffer(8));
-    await completeBatch(meetingId, 0, [{ speaker: 'Taler 1', start: 60, end: 65, text: 'Tidligere tekst' }]);
+    };
+    await putBatch({ ...first, status: 'pending' }, new ArrayBuffer(8));
+    await completeBatch(first, [{ speaker: 'Taler 1', start: 60, end: 65, text: 'Tidligere tekst' }]);
   }
 
   it('offers to resume, finish or delete instead of redirecting', async () => {

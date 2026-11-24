@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
+import { formatDate, formatDuration, hasMinutes, statusLabel, statusVariant } from '@/lib/utils';
 import { Meeting } from '@/types';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -46,10 +46,6 @@ function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeo
   return { label: statusLabel(m.status), variant: statusVariant(m.status) };
 }
 
-function hasMinutes(m: ArchiveMeeting) {
-  return m.status === 'minutes' || m.status === 'done' || m.status === 'redacted';
-}
-
 /**
  * Only a meeting that has reached Gennemgang or a referat has a page of its own to
  * open on. Every other status — the live ones, a failed one, the old bot's
@@ -57,7 +53,7 @@ function hasMinutes(m: ArchiveMeeting) {
  */
 function statusHref(m: ArchiveMeeting) {
   if (m.status === 'review') return `/meeting/${m.id}/review`;
-  if (hasMinutes(m)) return `/meeting/${m.id}/minutes`;
+  if (hasMinutes(m.status)) return `/meeting/${m.id}/minutes`;
   return `/meeting/${m.id}`;
 }
 
@@ -144,7 +140,7 @@ export function ArchiveMeetingRow({
           {rowBody}
         </Link>
 
-        {hasMinutes(meeting) && (
+        {hasMinutes(meeting.status) && (
           <Link
             href={`/meeting/${meeting.id}/export`}
             className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--fill)] transition-colors"

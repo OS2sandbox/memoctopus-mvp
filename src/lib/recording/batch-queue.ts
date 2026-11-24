@@ -55,7 +55,8 @@ type BatchQueue = ReturnType<typeof createQueue>;
 
 function createQueue(meetingId: string) {
   const entries = new Map<number, Entry>();
-  // Seqs that got their text; a later ledger read must not send them again.
+  // Seqs that got their text or have no audio left; a later ledger read must not
+  // send them again.
   const settled = new Set<number>();
   // Seqs sealed in this tab; a checkpoint of one arriving late must not reopen it.
   const sealed = new Set<number>();
@@ -130,7 +131,7 @@ function createQueue(meetingId: string) {
   // waiting (so `waiting: 0` means every text is in the ledger) and keeps its audio.
   async function store(entry: Entry, segments: TranscriptSegment[]): Promise<void> {
     try {
-      await serialized(() => completeBatch(meetingId, entry.seq, segments));
+      await serialized(() => completeBatch({ ...entry, meetingId }, segments));
     } catch (err) {
       console.error('[batch-queue] storing a transcribed batch failed, retrying:', err);
       entry.segments = segments;
@@ -157,7 +158,9 @@ function createQueue(meetingId: string) {
     }
     if (!wav) {
       // The audio is gone: expired into a `lost` row, or the meeting was deleted.
-      // There is nothing left to send; finalising the ledger shows the gap.
+      // There is nothing left to send; finalising the ledger shows the gap. Counted as
+      // settled so adoptPersisted() does not queue it again on every call.
+      settled.add(entry.seq);
       entries.delete(entry.seq);
       publish();
       pump();

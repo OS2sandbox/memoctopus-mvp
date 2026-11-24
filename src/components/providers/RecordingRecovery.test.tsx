@@ -94,19 +94,17 @@ describe('RecordingRecovery', () => {
     expect((await getTranscript(meetingId))?.diarizationStatus).toBe('pending');
   });
 
-  it('leaves an interrupted recording for the user to resume', async () => {
+  // Regression: an interrupted recording's waiting audio sat untranscribed until it expired.
+  it('sends an interrupted recording\'s waiting audio but leaves resuming it to the user', async () => {
     fetchMock.mockResolvedValue(ok('Hej.'));
     const meetingId = await stoppedRecording('recording');
 
     render(<RecordingRecovery />);
-    // The sweep is the first step of a run; once it has marked seq 0 the run has
-    // looked at every meeting.
-    await until(async () => (await listBatches(meetingId))[0]?.status === 'lost');
-    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    await until(async () => (await listBatches(meetingId))[1]?.status === 'done');
 
     expect((await getMeeting(meetingId))?.status).toBe('recording');
-    expect((await listBatches(meetingId)).map((b) => b.status)).toEqual(['lost', 'pending']);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await listBatches(meetingId)).map((b) => b.status)).toEqual(['lost', 'done']);
+    expect(await getPendingAudio(meetingId, 1)).toBeNull();
   });
 
   it('runs again when the connection comes back', async () => {

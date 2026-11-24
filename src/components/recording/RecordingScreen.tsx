@@ -21,7 +21,7 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
 import {
   saveAudio, updateMeeting, deleteMeeting, getMeeting, getTranscript, getAudio,
-  getRecordingSummary, listBatches, finalizeRecordingToTranscript,
+  getRecordingSummary, listBatches, deleteAudio,
 } from '@/lib/storage';
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import {
@@ -250,8 +250,10 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const batchWritesRef = useRef<Promise<void>>(Promise.resolve());
   // What saving needs once the queue has sent everything, possibly long after stop.
   const stoppedRef = useRef<{
-    blob: Blob; mimeType: string; durationSeconds: number;
+    blob: Blob;
     diarization: ReturnType<typeof startDiarization> | null;
+    // The audio could not be stored for playback (quota, private mode).
+    archiveFailed: boolean;
   } | null>(null);
   const settlingRef = useRef(false);
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
@@ -984,33 +986,30 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   // Finishes a recording that has no audio here to diarize or keep: an interrupted
   // one finished without resuming, or a stopped one opened again while batches still
-  // wait. Once the queue has sent everything, the ledger becomes the transcript the
-  // way RecordingRecovery does it; finalizeRecordingToTranscript is idempotent, so
-  // both may do it.
+  // wait. finishRecording waits for the queue if it must and settles it.
   async function finishWithoutAudio() {
     if (settlingRef.current) return;
     settlingRef.current = true;
     setInterrupted(null);
     setRecordingState('stopped');
     setIsUploading(true);
+    let outcome: Awaited<ReturnType<typeof finishRecording>>;
     try {
-      await queue.adoptPersisted();
-      if (queue.getState().waiting > 0) {
-        // shortcut: a reopened waiting recording shows no earlier text, revisit if users find the waiting screen confusing
-        await updateMeeting(meetingId, { status: 'processing' });
-        setWaitingForQueue(true);
-        return;
-      }
-      setWaitingForQueue(false);
-      // Written before the transcript moves the meeting to `review`.
-      await updateMeeting(meetingId, { audioDeleted: true });
-      await finalizeRecordingToTranscript(meetingId, { diarizationStatus: 'done' });
+      outcome = await finishRecording(meetingId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt under transskription');
       setIsUploading(false);
       return;
     } finally {
       settlingRef.current = false;
+    }
+    // shortcut: a reopened waiting recording shows no earlier text, revisit if users find the waiting screen confusing
+    setWaitingForQueue(outcome === 'waiting');
+    if (outcome === 'waiting') return;
+    if (outcome === 'empty') {
+      setError('Ingen tale fundet i optagelsen. Var mikrofonen aktiv og ikke slået fra?');
+      setIsUploading(false);
+      return;
     }
     onRecordingComplete?.();
     router.push(`/meeting/${meetingId}/review`);
@@ -1159,8 +1158,21 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     // it — the transcript is saved and shown with default labels, and speaker labels
     // are patched in (and the review screen refreshed) when diarization lands.
     // Offline, it is started once the transcript is saved.
+    // A resumed recording's earlier sessions have no audio left, so none is kept.
+    // Otherwise the audio is stored for playback now, before anything can settle the
+    // recording, so whoever settles it sees that it has audio.
+    let archiveFailed = false;
+    if (resumedAtRef.current === undefined) {
+      try {
+        await saveAudio(meetingId, blob, mimeType);
+        await updateMeeting(meetingId, { audioSizeBytes: blob.size, audioDurationSeconds: durationSeconds });
+      } catch (err) {
+        console.error('[archive] save failed:', err);
+        archiveFailed = true;
+      }
+    }
     stoppedRef.current = {
-      blob, mimeType, durationSeconds,
+      blob, archiveFailed,
       diarization: connectivity.isOnline() ? startDiarization(meetingId, blob) : null,
     };
 
@@ -1186,7 +1198,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     try {
       // Written before the transcript moves the meeting to `review`.
       if (resumedAt !== undefined) await updateMeeting(meetingId, { audioDeleted: true });
-      const outcome = await finishRecording(meetingId);
+      const outcome = await finishRecording(meetingId, { diarizing: true });
       setWaitingForQueue(outcome === 'waiting');
       if (outcome === 'waiting') return;
       stoppedRef.current = null;
@@ -1207,22 +1219,10 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       settlingRef.current = false;
     }
 
-    // A resumed recording's earlier sessions have no audio left, so none is kept.
-    if (resumedAt !== undefined) {
-      onRecordingComplete?.();
-      router.push(`/meeting/${meetingId}/review`);
-      return;
-    }
-
-    // Now that a transcript exists, archive the audio for playback during review.
-    try {
-      await saveAudio(meetingId, stopped.blob, stopped.mimeType);
-      await updateMeeting(meetingId, { audioSizeBytes: stopped.blob.size, audioDurationSeconds: stopped.durationSeconds });
-    } catch (err) {
-      // The transcript is already saved; only the audio archive failed (e.g. quota
-      // exceeded or private-browsing). Warn so the user knows playback may not work,
-      // but the review is still available via the transcript.
-      console.error('[archive] save failed:', err);
+    if (stopped.archiveFailed) {
+      // The transcript is saved; only the audio archive failed (e.g. quota exceeded
+      // or private browsing). Warn so the user knows playback may not work, but the
+      // review is still available via the transcript.
       setError('Transskriptionen er gemt, men lydfilen kunne ikke gemmes lokalt (muligvis fuld lageropbevaring). Gennemgang er stadig tilgængelig.');
       setIsUploading(false);
       return;
@@ -1256,6 +1256,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   async function confirmOverwrite() {
     setIsOverwriting(true);
+    // The old recording must not be played back, or diarized, as the new one.
+    await deleteAudio(meetingId);
     await updateMeeting(meetingId, {
       status: 'recording',
       audioDeleted: false,

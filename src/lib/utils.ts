@@ -41,6 +41,11 @@ export function formatDateTime(date: Date | string): string {
   }).format(d);
 }
 
+// A meeting in one of these statuses has a referat.
+export function hasMinutes(status: string): boolean {
+  return status === 'minutes' || status === 'done' || status === 'redacted';
+}
+
 export function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     awaiting_teams: 'Afventer Teams',

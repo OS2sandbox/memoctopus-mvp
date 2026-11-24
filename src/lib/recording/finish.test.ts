@@ -2,7 +2,8 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setStorageUserId } from '@/lib/storage/scope';
-import { createMeeting, getMeeting } from '@/lib/storage/meetings';
+import { createMeeting, getMeeting, updateMeeting } from '@/lib/storage/meetings';
+import { saveAudio } from '@/lib/storage/audio';
 import { getTranscript } from '@/lib/storage/transcripts';
 import { putBatch, completeBatch, listBatches, getPendingAudio, finalizeRecordingToTranscript } from '@/lib/storage/recording';
 import { getBatchQueue } from './batch-queue';
@@ -34,21 +35,72 @@ const seg = (text: string, start: number) => ({ speaker: 'Taler 1', start, end: 
 describe('finishRecording', () => {
   it('saves the transcript when every batch has its text', async () => {
     await putBatch(batch(0), wav());
-    await completeBatch(meetingId, 0, [seg('Hej.', 0)]);
+    await completeBatch(batch(0), [seg('Hej.', 0)]);
     await putBatch(batch(1), wav());
-    await completeBatch(meetingId, 1, [seg('Farvel.', 27)]);
+    await completeBatch(batch(1), [seg('Farvel.', 27)]);
 
     expect(await finishRecording(meetingId)).toBe('saved');
 
     expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Hej.', 'Farvel.']);
-    expect((await getTranscript(meetingId))?.diarizationStatus).toBe('pending');
     expect((await getMeeting(meetingId))?.status).toBe('review');
     expect(await listBatches(meetingId)).toEqual([]);
   });
 
+  // Regression: whoever settled the recording first decided alone whether it had audio.
+  it.each([
+    ['stored audio', async () => { await saveAudio(meetingId, new Blob(['lyd']), 'audio/webm'); }, {}, 'pending', false],
+    ['the caller diarizing', async () => {}, { diarizing: true }, 'pending', false],
+    ['no audio', async () => {}, {}, 'done', true],
+  ] as const)('with %s, diarization is %s and audioDeleted %s', async (_case, seed, opts, diarizationStatus, audioDeleted) => {
+    await seed();
+    await putBatch(batch(0), wav());
+    await completeBatch(batch(0), [seg('Hej.', 0)]);
+
+    expect(await finishRecording(meetingId, opts)).toBe('saved');
+
+    expect((await getTranscript(meetingId))?.diarizationStatus).toBe(diarizationStatus);
+    expect((await getMeeting(meetingId))?.audioDeleted).toBe(audioDeleted);
+  });
+
+  it('settles a waiting recording by itself once its last batch is transcribed', async () => {
+    let answer: (r: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    await putBatch(batch(0), wav());
+
+    expect(await finishRecording(meetingId)).toBe('waiting');
+    answer(new Response(JSON.stringify({ text: 'Hej.' }), { status: 200 }));
+
+    await vi.waitFor(async () => expect((await getMeeting(meetingId))?.status).toBe('review'));
+    expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Hej.']);
+  });
+
+  it('does not wait for a batch whose audio is gone, and marks it in the transcript', async () => {
+    await putBatch(batch(0));
+
+    expect(await finishRecording(meetingId)).toBe('waiting');
+
+    await vi.waitFor(async () => expect((await getMeeting(meetingId))?.status).toBe('review'));
+    expect((await getTranscript(meetingId))?.segments[0].text).toMatch(/kunne ikke transskriberes/);
+  });
+
+  // Regression: a silent re-recording reported the old transcript as its own.
+  it('keeps the transcript a re-recorded meeting had when the new take has no speech', async () => {
+    await putBatch(batch(0), wav());
+    await completeBatch(batch(0), [seg('Gammel.', 0)]);
+    await finishRecording(meetingId);
+    await updateMeeting(meetingId, { status: 'recording' });
+    await putBatch(batch(1), wav());
+    await completeBatch(batch(1), []);
+
+    expect(await finishRecording(meetingId)).toBe('empty');
+
+    expect((await getTranscript(meetingId))?.segments.map((s) => s.text)).toEqual(['Gammel.']);
+    expect(await getMeeting(meetingId)).not.toBeNull();
+  });
+
   it('waits, and marks the meeting processing, while a batch is still untranscribed', async () => {
     await putBatch(batch(0), wav());
-    await completeBatch(meetingId, 0, [seg('Hej.', 0)]);
+    await completeBatch(batch(0), [seg('Hej.', 0)]);
     await putBatch(batch(1), wav());
 
     expect(await finishRecording(meetingId)).toBe('waiting');
@@ -73,7 +125,7 @@ describe('finishRecording', () => {
 
   it('reports saved, and keeps the transcript, when RecordingRecovery finalised the ledger first', async () => {
     await putBatch(batch(0), wav());
-    await completeBatch(meetingId, 0, [seg('Hej.', 0)]);
+    await completeBatch(batch(0), [seg('Hej.', 0)]);
     await finalizeRecordingToTranscript(meetingId, { diarizationStatus: 'done' });
 
     expect(await finishRecording(meetingId)).toBe('saved');
@@ -86,7 +138,7 @@ describe('finishRecording', () => {
     ['no batch at all', async () => {}],
     ['only batches without speech', async () => {
       await putBatch(batch(0), wav());
-      await completeBatch(meetingId, 0, []);
+      await completeBatch(batch(0), []);
     }],
   ])('reports empty and deletes the meeting when there is %s', async (_case, seed) => {
     await seed();

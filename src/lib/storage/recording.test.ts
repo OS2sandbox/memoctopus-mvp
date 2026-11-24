@@ -109,17 +109,25 @@ describe('putBatch', () => {
 describe('completeBatch', () => {
   it('writes the segments and deletes the audio together', async () => {
     await putBatch(batch('m', 0, 0, 27), wav());
-    await completeBatch('m', 0, [seg('hej', 0, 2)]);
+    await completeBatch(batch('m', 0, 0, 27), [seg('hej', 0, 2)]);
 
     const [row] = await listBatches('m');
     expect(row).toMatchObject({ status: 'done', segments: [seg('hej', 0, 2)] });
     expect(await getPendingAudio('m', 0)).toBeNull();
   });
 
+  it('stores the text of a batch IndexedDB refused to store when it was sealed', async () => {
+    const m = await createMeeting({ title: 'Møde' });
+    await completeBatch(batch(m.id, 0, 0, 27), [seg('hej', 0, 2)]);
+
+    const [row] = await listBatches(m.id);
+    expect(row).toMatchObject({ status: 'done', segments: [seg('hej', 0, 2)], totalWavDuration: 27 });
+  });
+
   it('does not bring back a batch whose meeting was deleted meanwhile', async () => {
     await putBatch(batch('m', 0, 0, 27), wav());
     await deleteMeeting('m');
-    await completeBatch('m', 0, [seg('hej', 0, 2)]);
+    await completeBatch(batch('m', 0, 0, 27), [seg('hej', 0, 2)]);
     expect(await listBatches('m')).toEqual([]);
   });
 });
@@ -144,13 +152,11 @@ describe('sweepExpiredPendingAudio', () => {
 describe('getRecordingSummary / listMeetingIdsWithRecordingState', () => {
   it('derives the session state from the rows', async () => {
     await putBatch(batch('m', 0, 0, 27), wav());
-    await completeBatch('m', 0, [seg('hej', 0, 2)]);
+    await completeBatch(batch('m', 0, 0, 27), [seg('hej', 0, 2)]);
     await putBatch(batch('m', 1, 27, 54, 1), wav());
     await putBatch(batch('other', 0, 0, 5), wav());
 
-    expect(await getRecordingSummary('m')).toEqual({
-      batches: 2, done: 1, waiting: 1, lost: 0, nextSeq: 2, nextSession: 2, timelineEnd: 54,
-    });
+    expect(await getRecordingSummary('m')).toEqual({ nextSeq: 2, nextSession: 2, timelineEnd: 54 });
     expect(await getRecordingSummary('none')).toBeNull();
     expect((await listMeetingIdsWithRecordingState()).sort()).toEqual(['m', 'other']);
   });
@@ -160,14 +166,14 @@ describe('finalizeRecordingToTranscript', () => {
   it('writes the transcript with lost batches as marker lines, sets review and deletes the ledger', async () => {
     const m = await createMeeting({ title: 'Møde' });
     await putBatch(batch(m.id, 0, 0, 27), wav());
-    await completeBatch(m.id, 0, [seg('hej', 1, 2)]);
+    await completeBatch(batch(m.id, 0, 0, 27), [seg('hej', 1, 2)]);
     await putBatch(batch(m.id, 1, 27, 754), wav());
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + PENDING_AUDIO_TTL_MS + 1);
     await sweepExpiredPendingAudio();
     vi.useRealTimers();
     await putBatch(batch(m.id, 2, 754, 760), wav());
-    await completeBatch(m.id, 2, [seg('farvel', 755, 756)]);
+    await completeBatch(batch(m.id, 2, 0, 27), [seg('farvel', 755, 756)]);
 
     const written = await finalizeRecordingToTranscript(m.id, { diarizationStatus: 'pending' });
 
@@ -189,7 +195,7 @@ describe('finalizeRecordingToTranscript', () => {
   it('is idempotent: a second call finds no rows and changes nothing', async () => {
     const m = await createMeeting({ title: 'Møde' });
     await putBatch(batch(m.id, 0, 0, 27), wav());
-    await completeBatch(m.id, 0, [seg('hej', 1, 2)]);
+    await completeBatch(batch(m.id, 0, 0, 27), [seg('hej', 1, 2)]);
     await finalizeRecordingToTranscript(m.id, { diarizationStatus: 'pending' });
     const first = await getTranscript(m.id);
 

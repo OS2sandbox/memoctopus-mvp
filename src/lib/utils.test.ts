@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cn, formatDuration, formatFileSize, formatDate, formatDateTime, statusLabel, statusVariant } from './utils';
+import { cn, formatDuration, formatFileSize, formatDate, formatDateTime, hasMinutes, statusLabel, statusVariant } from './utils';
 
 // ─── cn ───────────────────────────────────────────────────────────────────────
 
@@ -200,5 +200,14 @@ describe('statusVariant', () => {
 
   it('returns "secondary" for empty string', () => {
     expect(statusVariant('')).toBe('secondary');
+  });
+});
+
+describe('hasMinutes', () => {
+  it.each([
+    ['minutes', true], ['done', true], ['redacted', true],
+    ['review', false], ['recording', false], ['processing', false],
+  ])('%s → %s', (status, expected) => {
+    expect(hasMinutes(status)).toBe(expected);
   });
 });

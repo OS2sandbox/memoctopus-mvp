@@ -13,6 +13,7 @@ import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { ProcessingTranscription } from '@/components/meeting/ProcessingTranscription';
 import { useReviewAudio } from '@/lib/review-audio-context';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { hasMinutes } from '@/lib/utils';
 import {
   getMeeting,
   getTranscript,
@@ -33,7 +34,7 @@ interface MeetingPageClientProps {
 // Where a Graph meeting's recording tab hands over to. It has no recording of its
 // own to show once Teams has been collected, so it lands on the stage it reached.
 function graphStageTab(status: StoredMeeting['status']): ProcessPhase {
-  if (status === 'minutes' || status === 'done' || status === 'redacted') return 'minutes';
+  if (hasMinutes(status)) return 'minutes';
   return 'review';
 }
 
@@ -222,7 +223,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     const s = meeting.status;
     // These statuses come after the referat is generated, so Referat is done and
     // ProcessStrip opens Eksport after it.
-    if (s === 'minutes' || s === 'done' || s === 'redacted') return ['recording', 'review', 'minutes'];
+    if (hasMinutes(s)) return ['recording', 'review', 'minutes'];
     if (s === 'review') return ['recording'];
     return [];
   })();

@@ -2,6 +2,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setStorageUserId } from '@/lib/storage/scope';
+import { createMeeting } from '@/lib/storage/meetings';
 import { putBatch, completeBatch, listBatches, getPendingAudio } from '@/lib/storage/recording';
 import { getBatchQueue, type SealedBatch } from './batch-queue';
 
@@ -121,7 +122,7 @@ describe('batch queue', () => {
     await putBatch({ ...sealed(0), meetingId, status: 'pending' }, sealed(0).wav);
     await putBatch({ ...sealed(1), meetingId, status: 'open' }, sealed(1).wav);
     await putBatch({ ...sealed(2), meetingId, status: 'pending' }, sealed(2).wav);
-    await completeBatch(meetingId, 2, []);
+    await completeBatch({ ...sealed(2), meetingId }, []);
     fetchMock.mockImplementation(async () => ok());
 
     const queue = getBatchQueue(meetingId);
@@ -159,6 +160,7 @@ describe('batch queue', () => {
   });
 
   it('still sends the batch from memory when IndexedDB refuses the write', async () => {
+    await createMeeting({ id: meetingId, title: 'Møde' });
     fetchMock.mockImplementation(async () => ok());
     const put = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(() => {
       throw new DOMException('Quota exceeded', 'QuotaExceededError');
@@ -173,6 +175,10 @@ describe('batch queue', () => {
     const sent = (fetchMock.mock.calls[0][1].body as FormData).get('audio') as Blob;
     expect(sent.size).toBe(16);
     expect(queue.getState().persistFailed).toBe(true);
+    // The text is stored even though the batch never got a row when it was sealed.
+    const [row] = await listBatches(meetingId);
+    expect(row).toMatchObject({ seq: 0, status: 'done', segments: [expect.objectContaining({ text: 'Hej.' })] });
+    expect(row).not.toHaveProperty('wav');
   });
 
   it('keeps the text and stores it again when writing it to the ledger fails', async () => {
