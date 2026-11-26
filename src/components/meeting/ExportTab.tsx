@@ -7,10 +7,11 @@ import { getMeeting, getMinutes } from '@/lib/storage';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
-type ExportFormat = 'pdf' | 'md';
+type ExportFormat = 'pdf' | 'docx' | 'md';
 
 const FORMATS: { key: ExportFormat; label: string; description: string; file: string; meta: string }[] = [
   { key: 'pdf', label: 'PDF', description: 'Til arkivering og distribution. Kan ikke redigeres.', file: 'referat.pdf', meta: '2 sider · A4' },
+  { key: 'docx', label: 'Word', description: 'Til videre redigering i Word eller LibreOffice.', file: 'referat.docx', meta: '.docx · redigerbar' },
   { key: 'md', label: 'Markdown', description: 'Ren tekst — egnet til Notion, Obsidian og andre.', file: 'referat.md', meta: '~3 KB · UTF-8' },
 ];
 

@@ -91,15 +91,17 @@ describe('ExportTab — initial render', () => {
     expect(screen.getByText('aflevering')).toBeInTheDocument();
   });
 
-  it('renders both format radio buttons', () => {
+  it('renders all three format radio buttons', () => {
     renderTab();
     expect(screen.getByRole('radio', { name: /PDF/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Word/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Markdown/ })).toBeInTheDocument();
   });
 
   it('PDF is selected by default (aria-checked=true)', () => {
     renderTab();
     expect(screen.getByRole('radio', { name: /PDF/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /Word/ })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('radio', { name: /Markdown/ })).toHaveAttribute('aria-checked', 'false');
   });
 
@@ -150,6 +152,21 @@ describe('ExportTab — format selection', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /download referat\.md/ })).toBeInTheDocument();
     });
+  });
+
+  it('clicking Word selects it and updates the download button to referat.docx', async () => {
+    renderTab();
+    fireEvent.click(screen.getByRole('radio', { name: /Word/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /Word/ })).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByRole('button', { name: /download referat\.docx/ })).toBeInTheDocument();
+    });
+  });
+
+  it('shows referat.docx filename and description in the Word format card', () => {
+    renderTab();
+    expect(screen.getByText('referat.docx')).toBeInTheDocument();
+    expect(screen.getByText('Til videre redigering i Word eller LibreOffice.')).toBeInTheDocument();
   });
 
   it('shows referat.pdf filename in the format card for PDF', () => {
@@ -286,6 +303,28 @@ describe('ExportTab — successful export', () => {
             title: 'Test møde',
             content: { sections: [] },
             format: 'md',
+          }),
+        }),
+      );
+    });
+  });
+
+  it('sends format=docx when Word is selected', async () => {
+    renderTab();
+    fireEvent.click(screen.getByRole('radio', { name: /Word/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /download referat\.docx/ }));
+    });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify({
+            title: 'Test møde',
+            content: { sections: [] },
+            format: 'docx',
           }),
         }),
       );
@@ -556,6 +595,6 @@ describe('ExportTab — radiogroup accessibility', () => {
   it('each format button has role="radio"', () => {
     renderTab();
     const radios = screen.getAllByRole('radio');
-    expect(radios).toHaveLength(2);
+    expect(radios).toHaveLength(3);
   });
 });
