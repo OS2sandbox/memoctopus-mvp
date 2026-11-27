@@ -255,4 +255,15 @@ describe('groupIntoChapters', () => {
     expect(result[0].startTime).toBe(shortMeeting[0].start);
     expect(result[0].endTime).toBe(shortMeeting[shortMeeting.length - 1].end);
   });
+
+  it('caps the completion output tokens so long transcripts cannot starve the JSON', async () => {
+    mockComplete.mockResolvedValueOnce(
+      openaiResponse(JSON.stringify({ chapters: [{ startIndex: 0, title: 'T', summary: 'S' }] })),
+    );
+
+    await groupIntoChapters(longMeeting);
+
+    const call = mockComplete.mock.calls[0][0];
+    expect(call.max_tokens).toBe(2000);
+  });
 });

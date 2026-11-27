@@ -19,8 +19,27 @@ import {
 } from './diarize-client';
 import type { SpeakerTurn } from '@/lib/ai/diarization';
 
-function jsonResponse(body: unknown, ok = true): Response {
-  return { ok, json: async () => body } as Response;
+// The diarize route answers with an NDJSON stream: pings while it waits, then a
+// terminal done/error event. A successful body here includes a ping so every test
+// exercises the skip-pings path.
+function streamOf(lines: unknown[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const line of lines) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(line) + '\n'));
+      }
+      controller.close();
+    },
+  });
+}
+
+function jsonResponse(body: { turns?: unknown }, ok = true): Response {
+  const lines = ok ? [{ type: 'ping' }, { type: 'done', turns: body.turns }] : [];
+  return { ok, status: ok ? 200 : 500, body: streamOf(lines) } as unknown as Response;
+}
+
+function ndjsonRawResponse(lines: unknown[]): Response {
+  return { ok: true, status: 200, body: streamOf(lines) } as unknown as Response;
 }
 
 let mockFetch: ReturnType<typeof vi.fn>;
@@ -75,6 +94,34 @@ describe('fetchDiarizationTurns', () => {
   it('returns null when the request throws (service/tunnel down)', async () => {
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
     expect(await fetchDiarizationTurns('m', wav)).toBeNull();
+  });
+
+  it('returns null on a terminal error event from the route', async () => {
+    mockFetch.mockResolvedValueOnce(ndjsonRawResponse([{ type: 'ping' }, { type: 'error' }]));
+    expect(await fetchDiarizationTurns('m', wav)).toBeNull();
+  });
+
+  // The whole point of the stream: a connection cut mid-wait ends the stream
+  // without a terminal event, and must read as failure, not as "no speakers".
+  it('returns null when the stream ends without a done/error event', async () => {
+    mockFetch.mockResolvedValueOnce(ndjsonRawResponse([{ type: 'ping' }, { type: 'ping' }]));
+    expect(await fetchDiarizationTurns('m', wav)).toBeNull();
+  });
+
+  it('handles events split across chunk boundaries', async () => {
+    const turns = [{ speaker: 'SPEAKER_00', start: 0, end: 2 }];
+    const payload = JSON.stringify({ type: 'ping' }) + '\n' + JSON.stringify({ type: 'done', turns }) + '\n';
+    const encoded = new TextEncoder().encode(payload);
+    const mid = Math.floor(encoded.length / 2);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoded.slice(0, mid));
+        controller.enqueue(encoded.slice(mid));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body } as unknown as Response);
+    expect(await fetchDiarizationTurns('m', wav)).toEqual(turns);
   });
 });
 
