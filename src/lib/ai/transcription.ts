@@ -213,16 +213,3 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
     return segment;
   });
 }
-
-// ─── Active provider ──────────────────────────────────────────────────────────
-
-let _provider: TranscriptionProvider | null = null;
-
-export function getTranscriptionProvider(): TranscriptionProvider {
-  if (!_provider) _provider = new HviskeProvider();
-  return _provider;
-}
-
-export function setTranscriptionProvider(provider: TranscriptionProvider): void {
-  _provider = provider;
-}

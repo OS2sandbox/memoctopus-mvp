@@ -3,8 +3,6 @@ import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
 
 // 27 s: hviske processes up to ~30 s windows reliably; leaves headroom for VAD pre/post-roll padding.
 export const BATCH_DURATION_S = 27;
-// 20 workers: enough to saturate a GPU server without overwhelming it on long recordings.
-export const BATCH_CONCURRENCY = 20;
 export const MAX_WORDS_PER_LINE = 20;
 
 export type VadInterval = {

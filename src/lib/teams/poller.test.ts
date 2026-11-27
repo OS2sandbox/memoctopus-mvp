@@ -1,11 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockConnect = vi.fn();
-vi.mock('@/lib/db', () => ({ pool: { connect: (...a: unknown[]) => mockConnect(...a) }, db: {} }));
+const mockPoolQuery = vi.fn();
+vi.mock('@/lib/db', () => ({
+  pool: { connect: (...a: unknown[]) => mockConnect(...a), query: (...a: unknown[]) => mockPoolQuery(...a) },
+  db: {},
+}));
 
 // graph-client (for GraphError) pulls in better-auth, which needs a real DB.
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 
+// The audit helpers are asserted on below; what they would write is covered by audit.test.ts.
+vi.mock('./audit', () => ({
+  recordTeamsArtifactsFetch: vi.fn().mockResolvedValue(undefined),
+  recordTeamsRecordingDelete: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/pending-artifacts', () => ({ acknowledgePendingTranscript: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
 vi.mock('./meeting-resolver', () => ({ getMeeting: vi.fn() }));
 vi.mock('./recording-cleanup', () => ({ deleteRecordingFromDrive: vi.fn() }));
@@ -26,7 +37,7 @@ vi.mock('./store', async (importOriginal) => {
     setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
     refreshTeamsMeetingSchedule: vi.fn(),
     listPendingRecordingCleanups: vi.fn().mockResolvedValue([]),
-    settleRecordingCleanup: vi.fn().mockResolvedValue(undefined),
+    settleRecordingCleanup: vi.fn().mockResolvedValue(true),
     markTeamsMeetingOpened: vi.fn(),
   };
 });
@@ -47,6 +58,8 @@ import {
   RECORDING_STALL_LIMIT,
 } from './poller';
 import { GraphError } from './graph-client';
+import { acknowledgePendingTranscript } from '@/lib/pending-artifacts';
+import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
 import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
 import { getMeeting } from './meeting-resolver';
@@ -76,6 +89,8 @@ const mockRefresh = vi.mocked(refreshTeamsMeetingSchedule);
 const mockDeleteRecording = vi.mocked(deleteRecordingFromDrive);
 const mockListCleanups = vi.mocked(listPendingRecordingCleanups);
 const mockSettle = vi.mocked(settleRecordingCleanup);
+const mockAuditFetch = vi.mocked(recordTeamsArtifactsFetch);
+const mockAuditDelete = vi.mocked(recordTeamsRecordingDelete);
 const mockMarkOpened = vi.mocked(markTeamsMeetingOpened);
 
 /** What getMeeting answers by default: the same window the row already has. */
@@ -140,6 +155,7 @@ beforeEach(() => {
   mockRefresh.mockImplementation(async (_u, _id, f) =>
     row({ scheduledStart: f.scheduledStart, scheduledEnd: f.scheduledEnd, subject: f.subject }));
   mockQuery.mockResolvedValue([]);
+  mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
   mockSetState.mockResolvedValue(row());
   mockListCleanups.mockResolvedValue([]);
 });
@@ -593,6 +609,51 @@ describe('pollMeeting', () => {
     spy.mockRestore();
   });
 
+  it('removes the stash when the person deleted the meeting while the run was working', async () => {
+    const live = row();
+    // The row exists when the poll starts and is gone when the run has finished.
+    mockGet.mockResolvedValueOnce(live).mockResolvedValue(null);
+    mockProcess.mockResolvedValueOnce({
+      status: 'ready', mode: 'recording+transcript', transcriptId: 't1', recordingId: 'r1', recordingBytes: null, recordingSizes: [],
+    });
+    mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
+
+    await expect(pollMeeting('u1', 'm1', NOW)).resolves.toBe(live);
+
+    expect(vi.mocked(acknowledgePendingTranscript)).toHaveBeenCalledWith('m1', 'u1');
+    // Only the one attempt to write the result: no second write for a row that is gone.
+    expect(mockMark).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the recording in OneDrive when the person deleted the meeting while the run was transcribing it', async () => {
+    const live = row();
+    mockGet.mockResolvedValueOnce(live).mockResolvedValue(null);
+    mockProcess.mockResolvedValueOnce({
+      status: 'ready', mode: 'recording+transcript', transcriptId: 't1', recordingId: 'r1', recordingBytes: 4242, recordingSizes: [4242],
+    });
+    mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
+
+    await expect(pollMeeting('u1', 'm1', NOW)).resolves.toBe(live);
+
+    // A recording is deleted only once its person has the transcript, and this one never got it.
+    expect(mockDeleteRecording).not.toHaveBeenCalled();
+    expect(mockAuditDelete).not.toHaveBeenCalled();
+    expect(vi.mocked(acknowledgePendingTranscript)).toHaveBeenCalledWith('m1', 'u1');
+    // A meeting the person deleted was not fetched for them.
+    expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not touch the stash when a failing poll finds its row still there', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockRejectedValueOnce(new Error('socket hang up'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(vi.mocked(acknowledgePendingTranscript)).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it('returns the row markPollAttempt just wrote, via RETURNING, without a re-SELECT', async () => {
     const after = row({ state: 'ready' });
     mockGet.mockResolvedValueOnce(row());
@@ -619,7 +680,7 @@ describe('pollDueMeetings', () => {
       if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked }] };
       return { rows: [] };
     });
-    return { query, release: vi.fn() };
+    return { query, release: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
   }
 
   it('skips the run when another instance holds the advisory lock', async () => {
@@ -632,6 +693,48 @@ describe('pollDueMeetings', () => {
       POLL_LOCK_KEY,
     ]);
     expect(c.release).toHaveBeenCalled();
+  });
+
+  it('survives an error event on the held connection and discards that client', async () => {
+    // pg emits 'error' on a checked-out client whose socket dies; with no
+    // listener that is an uncaught exception that kills the server.
+    const handlers: Array<(err: Error) => void> = [];
+    const c = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+      on: vi.fn((event: string, h: (err: Error) => void) => {
+        if (event === 'error') handlers.push(h);
+      }),
+      removeListener: vi.fn(),
+    };
+    mockConnect.mockResolvedValue(c);
+    mockListUsers.mockImplementation(async () => {
+      expect(handlers).toHaveLength(1);
+      expect(() => handlers[0](new Error('terminated'))).not.toThrow();
+      return [];
+    });
+
+    expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+    expect(c.release).toHaveBeenCalledWith(true);
+  });
+
+  it('removes its error listener before releasing the client', async () => {
+    // pg-pool only manages its own listener, so ours would pile up on a reused client.
+    const c = client(true);
+    mockConnect.mockResolvedValueOnce(c);
+    mockListUsers.mockResolvedValueOnce([]);
+
+    await pollDueMeetings(NOW);
+
+    const added = c.on.mock.calls.find(([e]) => e === 'error')?.[1];
+    expect(added).toBeTypeOf('function');
+    expect(c.removeListener).toHaveBeenCalledWith('error', added);
+    expect(c.removeListener.mock.invocationCallOrder[0]).toBeLessThan(
+      c.release.mock.invocationCallOrder[0],
+    );
   });
 
   it('polls every due meeting of every user and releases the lock', async () => {
@@ -670,6 +773,57 @@ describe('pollDueMeetings', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
     spy.mockRestore();
+  });
+
+  describe('a disabled directory user', () => {
+    function lockedClient() {
+      mockConnect.mockResolvedValue({
+        query: vi.fn().mockResolvedValue({ rows: [{ locked: true }] }),
+        release: vi.fn(),
+        on: vi.fn(),
+        removeListener: vi.fn(),
+      });
+    }
+
+    it('gets no Graph call, no poll and no recording cleanup', async () => {
+      lockedClient();
+      mockListUsers.mockResolvedValue(['u1']);
+      mockPoolQuery.mockResolvedValue({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      mockListDue.mockResolvedValue([row()]);
+      mockListCleanups.mockResolvedValue([row({ recordingCleanup: 'pending' })]);
+
+      expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+
+      expect(mockPoolQuery).toHaveBeenCalledWith(expect.stringContaining('public.directory_users'), ['u1']);
+      expect(mockListDue).not.toHaveBeenCalled();
+      expect(mockListCleanups).not.toHaveBeenCalled();
+      expect(mockProcess).not.toHaveBeenCalled();
+      expect(mockGetMeeting).not.toHaveBeenCalled();
+      expect(mockDeleteRecording).not.toHaveBeenCalled();
+    });
+
+    it('is not assumed for a user with no directory row', async () => {
+      lockedClient();
+      mockListUsers.mockResolvedValue(['u1']);
+      mockListDue.mockResolvedValue([row()]);
+      mockGet.mockResolvedValue(row());
+      mockProcess.mockResolvedValue({ status: 'pending' });
+
+      expect(await pollDueMeetings(NOW)).toEqual({ polled: 1 });
+    });
+
+    it('is skipped for the tick when the lookup fails', async () => {
+      lockedClient();
+      mockListUsers.mockResolvedValue(['u1']);
+      mockPoolQuery.mockRejectedValue(new Error('db down'));
+      mockListDue.mockResolvedValue([row()]);
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+      expect(mockListDue).not.toHaveBeenCalled();
+      expect(mockProcess).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
   });
 });
 
@@ -713,7 +867,7 @@ describe('startPoller', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('TEAMS_POLL_INTERVAL_MS', '1000');
 
-    const c = { query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }), release: vi.fn() };
+    const c = { query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }), release: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
     mockConnect.mockResolvedValue(c);
 
     const stop = startPoller();
@@ -1232,6 +1386,8 @@ describe('deleting the recording from OneDrive', () => {
     mockConnect.mockResolvedValue({
       query: vi.fn().mockResolvedValue({ rows: [{ locked: true }] }),
       release,
+      on: vi.fn(),
+      removeListener: vi.fn(),
     });
     mockListUsers.mockResolvedValue(['u1']);
     mockListDue.mockResolvedValue([]);
@@ -1242,6 +1398,157 @@ describe('deleting the recording from OneDrive', () => {
 
     expect(result).toEqual({ polled: 0 });
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+  });
+});
+
+describe('audit events of the Teams poller', () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+  let error: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGet.mockResolvedValue(row());
+  });
+  afterEach(() => {
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  const ready = (over: Partial<Extract<PipelineOutcome, { status: 'ready' }>> = {}): PipelineOutcome => ({
+    status: 'ready',
+    mode: 'recording+transcript',
+    transcriptId: 't1',
+    recordingId: 'r1',
+    recordingBytes: 4242,
+    recordingSizes: [4242],
+    ...over,
+  });
+
+  it('a transcript and recording fetched by the background poller is one ready event with the person as owner', async () => {
+    process.env.TEAMS_DELETE_RECORDING = 'false';
+    mockProcess.mockResolvedValueOnce(ready());
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).toHaveBeenCalledTimes(1);
+    // Exactly these keys: no subject, join URL, speaker names or Graph ids can ride along.
+    expect(mockAuditFetch).toHaveBeenCalledWith({
+      userId: 'u1', meetingId: 'm1', trigger: 'poller', result: 'ready', transcript: true, recording: true,
+    });
+  });
+
+  it('a "Tjek nu" poll says manual; a transcript-only run says no recording', async () => {
+    mockProcess.mockResolvedValueOnce(ready({ mode: 'transcript-only', recordingId: null, recordingBytes: null }));
+
+    await pollMeeting('u1', 'm1', NOW, { force: true, trigger: 'manual' });
+
+    expect(mockAuditFetch).toHaveBeenCalledWith({
+      userId: 'u1', meetingId: 'm1', trigger: 'manual', result: 'ready', transcript: true, recording: false,
+    });
+  });
+
+  it('a recording-only run says no Teams transcript', async () => {
+    mockProcess.mockResolvedValueOnce(ready({ mode: 'recording-only', transcriptId: null }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).toHaveBeenCalledWith(expect.objectContaining({ result: 'ready', transcript: false, recording: true }));
+  });
+
+  it('an already-ready stash (nothing was fetched this time) is not an event', async () => {
+    mockProcess.mockResolvedValueOnce(ready({ transcriptId: null, recordingId: null, recordingBytes: null }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
+  it('a pipeline failure is a failed event with the closed code, never the message', async () => {
+    mockProcess.mockResolvedValueOnce({ status: 'failed', reason: 'Mødet "Lønforhandling" fejlede', code: 'http_502' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).toHaveBeenCalledWith({
+      userId: 'u1', meetingId: 'm1', trigger: 'poller', result: 'failed', transcript: false, recording: false, code: 'http_502',
+    });
+    expect(JSON.stringify(mockAuditFetch.mock.calls)).not.toContain('Lønforhandling');
+  });
+
+  it('a Graph error that fails the meeting is a failed event with the GraphError code', async () => {
+    mockProcess.mockRejectedValueOnce(new GraphError('http', 'Graph said: Kvartalsrapport', { status: 400 }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'http_400' }));
+
+    mockProcess.mockRejectedValueOnce(new GraphError('transcripts_disabled', 'x', { status: 403 }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'transcripts_disabled' }));
+    expect(JSON.stringify(mockAuditFetch.mock.calls)).not.toContain('Kvartalsrapport');
+  });
+
+  it('giving up and a meeting that is gone are failed events', async () => {
+    const end = new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000);
+    const old = { scheduledStart: null, scheduledEnd: end, createdAt: new Date(end.getTime() - 1000), lastPolledAt: new Date(NOW.getTime() - 3_600_000) };
+    mockGetMeeting.mockResolvedValue(graphMeeting({ scheduledStart: null, scheduledEnd: end.toISOString() }));
+    mockGet.mockResolvedValue(row(old));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'gave_up' }));
+    mockGet.mockResolvedValue(row({ ...old, state: 'needs_reauth' }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'reauth_required' }));
+    mockGetMeeting.mockResolvedValue(graphMeeting());
+
+    mockGet.mockResolvedValue(row());
+    mockGetMeeting.mockRejectedValueOnce(new GraphError('not_found', 'weg', { status: 404 }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'meeting_gone' }));
+  });
+
+  it('a poll that finds nothing yet, is throttled or needs a new sign-in is not an event', async () => {
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+    await pollMeeting('u1', 'm1', NOW);
+    mockProcess.mockRejectedValueOnce(new GraphError('unavailable', 'throttled', { status: 429, retryable: true }));
+    await pollMeeting('u1', 'm1', NOW);
+    mockProcess.mockRejectedValueOnce(new GraphError('reauth_required', 'weg', { status: 401 }));
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
+  it('reports the recording delete once, with its final status, and not while it is merely postponed', async () => {
+    const pending = row({ state: 'ready', lastPolledAt: new Date('2026-09-08T11:50:00Z'), recordingCleanup: 'pending', recordingBytes: 4242 });
+
+    mockDeleteRecording.mockResolvedValueOnce('recycled');
+    await cleanUpRecording('u1', pending, NOW);
+    expect(mockAuditDelete).toHaveBeenCalledTimes(1);
+    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'recycled' });
+
+    mockAuditDelete.mockClear();
+    mockDeleteRecording.mockResolvedValueOnce('ambiguous');
+    await cleanUpRecording('u1', pending, NOW);
+    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'failed' });
+
+    mockAuditDelete.mockClear();
+    mockDeleteRecording.mockRejectedValueOnce(new GraphError('unavailable', 'throttled', { status: 429, retryable: true }));
+    await cleanUpRecording('u1', pending, NOW);
+    expect(mockAuditDelete).not.toHaveBeenCalled();
+  });
+
+  it('a verdict that could not be written to the row is not reported as a delete', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('deleted');
+    mockSettle.mockRejectedValueOnce(new Error('db down'));
+    await cleanUpRecording('u1', row({ state: 'ready', recordingCleanup: 'pending', recordingBytes: 4242 }), NOW);
+    expect(mockAuditDelete).not.toHaveBeenCalled();
+  });
+
+  it('a verdict another run already settled is not reported a second time', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('not_found');
+    mockSettle.mockResolvedValueOnce(false);
+    const pending = row({ state: 'ready', recordingCleanup: 'pending', recordingBytes: 4242 });
+
+    const result = await cleanUpRecording('u1', pending, NOW);
+
+    expect(mockAuditDelete).not.toHaveBeenCalled();
+    expect(result).toBe(pending);
   });
 });
 

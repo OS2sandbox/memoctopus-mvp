@@ -1,5 +1,6 @@
 import { PiiResult, PiiReplacement } from '@/types';
 import { getLlmClient, llmModel } from './llm-client';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 const PII_SYSTEM_PROMPT = `Du er en dansk GDPR-assistent der identificerer og fjerner personhenførbare oplysninger fra mødetransskriptioner, baseret på EU-forordning 2016/679.
 
@@ -63,7 +64,8 @@ export async function removePii(text: string): Promise<PiiResult> {
     // NOTE: returning the original text is intentional (GDPR-safe fallback), but a
     // piiDetectionFailed flag to let callers distinguish "no PII" from "parse error"
     // would require extending PiiResult in src/types/index.ts — see notes.
-    console.error('[pii] parse failed. raw:', raw, err);
+    // Never `raw` or the SyntaxError: both quote the transcript and the PII being removed.
+    safeLogError('pii parse failed', err);
     return { cleanedText: text, replacements: [] };
   }
 }

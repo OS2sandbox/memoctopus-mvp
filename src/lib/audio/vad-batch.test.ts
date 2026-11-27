@@ -5,12 +5,9 @@ import {
   newVadBatchState,
   mapWavTime,
   splitTextWithIntervals,
-  runWithConcurrency,
   MAX_WORDS_PER_LINE,
   BATCH_DURATION_S,
-  BATCH_CONCURRENCY,
   type VadInterval,
-  type VadBatchState,
 } from './vad-batch';
 import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
 
@@ -450,84 +447,11 @@ describe('splitTextWithIntervals', () => {
   });
 });
 
-// ─── runWithConcurrency ───────────────────────────────────────────────────────
-
-describe('runWithConcurrency', () => {
-  it('returns empty array for empty task list', async () => {
-    const results = await runWithConcurrency([], 4);
-    expect(results).toEqual([]);
-  });
-
-  it('returns results in input order regardless of completion order', async () => {
-    // Task i completes after (3-i)*10ms delay — so task 0 takes longest
-    const delays = [30, 20, 10];
-    const tasks = delays.map((d, i) => () => new Promise<number>(res => setTimeout(() => res(i), d)));
-    const results = await runWithConcurrency(tasks, 3);
-    expect(results).toEqual([0, 1, 2]);
-  });
-
-  it('resolves all tasks with limit = 1 (serial execution)', async () => {
-    const order: number[] = [];
-    const tasks = [0, 1, 2, 3].map(i => async () => { order.push(i); return i; });
-    const results = await runWithConcurrency(tasks, 1);
-    expect(results).toEqual([0, 1, 2, 3]);
-    expect(order).toEqual([0, 1, 2, 3]);
-  });
-
-  it('resolves all tasks with limit >= task count (full parallelism)', async () => {
-    const tasks = [10, 20, 30].map(v => async () => v);
-    const results = await runWithConcurrency(tasks, 10);
-    expect(results).toEqual([10, 20, 30]);
-  });
-
-  it('does not exceed concurrency limit', async () => {
-    let concurrent = 0;
-    let maxConcurrent = 0;
-    const limit = 3;
-    const tasks = Array.from({ length: 9 }, (_, i) => async () => {
-      concurrent++;
-      maxConcurrent = Math.max(maxConcurrent, concurrent);
-      await new Promise<void>(res => setTimeout(res, 5));
-      concurrent--;
-      return i;
-    });
-    await runWithConcurrency(tasks, limit);
-    expect(maxConcurrent).toBeLessThanOrEqual(limit);
-  });
-
-  it('returns correct result count', async () => {
-    const tasks = Array.from({ length: 7 }, (_, i) => async () => i * 2);
-    const results = await runWithConcurrency(tasks, 3);
-    expect(results).toHaveLength(7);
-  });
-
-  it('each result value matches its task index', async () => {
-    const tasks = Array.from({ length: 5 }, (_, i) => async () => i * i);
-    const results = await runWithConcurrency(tasks, 2);
-    expect(results).toEqual([0, 1, 4, 9, 16]);
-  });
-
-  it('works with a single task', async () => {
-    const results = await runWithConcurrency([async () => 42], 5);
-    expect(results).toEqual([42]);
-  });
-
-  it('handles limit larger than task count without error', async () => {
-    const tasks = [async () => 1, async () => 2];
-    const results = await runWithConcurrency(tasks, 100);
-    expect(results).toEqual([1, 2]);
-  });
-});
-
 // ─── exported constants ───────────────────────────────────────────────────────
 
 describe('exported constants', () => {
   it('BATCH_DURATION_S is 27', () => {
     expect(BATCH_DURATION_S).toBe(27);
-  });
-
-  it('BATCH_CONCURRENCY is 20', () => {
-    expect(BATCH_CONCURRENCY).toBe(20);
   });
 
   it('MAX_WORDS_PER_LINE is 20', () => {

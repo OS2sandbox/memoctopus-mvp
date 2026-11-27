@@ -6,6 +6,12 @@ vi.mock('@/lib/auth', async () => {
   const { FAKE_SESSION } = await import('@/test/helpers');
   return { auth: { api: { getSession: vi.fn().mockResolvedValue(FAKE_SESSION) } } };
 });
+// The route's access check reads roles from the public tables, which PGlite does not have;
+// this file is about the per-user onboarding SQL, so the check lets the signed-in user through.
+vi.mock('@/lib/authz/app-access', async () => {
+  const { FAKE_SESSION } = await import('@/test/helpers');
+  return { requireAppAccess: vi.fn().mockResolvedValue({ session: FAKE_SESSION }) };
+});
 
 import { GET as getStateRoute } from '@/app/api/onboarding/state/route';
 import { ensureUserSchema, getUserSchemaName } from '@/lib/db/user-schema';
@@ -273,6 +279,8 @@ describe('ensureUserSchema upgrading onboarding_progress from an earlier shape',
   it('the first shape (FK to meetings, nullable meeting_id, partial index for global steps) ends up as a new schema has it, data kept', async () => {
     // As b13cd2e created it.
     await legacySchema([
+      // Schemas of that era still had the meetings table (ensureUserSchema no longer creates it).
+      `CREATE TABLE "${S}".meetings (id TEXT PRIMARY KEY, title TEXT NOT NULL)`,
       `CREATE TABLE "${S}".onboarding_progress (
          id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
          step_id     TEXT NOT NULL,

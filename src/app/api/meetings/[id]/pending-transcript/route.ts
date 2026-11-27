@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import {
   readPendingTranscript,
   acknowledgePendingTranscript,
@@ -32,8 +31,9 @@ import { queueRecordingCleanup } from '@/lib/teams/store';
 export const GET = withHandler(
   'meetings/pending-transcript',
   async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { id: meetingId } = await params;
     if (!isSafeMeetingId(meetingId)) {
@@ -78,14 +78,15 @@ export const GET = withHandler(
 export const DELETE = withHandler(
   'meetings/pending-transcript',
   async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { id: meetingId } = await params;
     const userId = session.user.id;
     // False only for a stale acknowledgement while a re-collect is running.
     const acknowledged = (await assertMeetingOwner(meetingId, userId))
-      ? await acknowledgePendingTranscript(meetingId)
+      ? await acknowledgePendingTranscript(meetingId, userId)
       : true;
     if (acknowledged && deleteRecordingEnabled()) {
       await queueRecordingCleanup(userId, meetingId);

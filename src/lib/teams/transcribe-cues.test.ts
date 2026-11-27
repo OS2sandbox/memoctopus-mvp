@@ -124,6 +124,15 @@ describe('transcribeAlongCues', () => {
     expect(segments).toEqual([]);
   });
 
+  it('logs a failed slice without the error message, which can echo transcript text', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribeRaw.mockRejectedValue(new Error('SECRET transcript text'));
+    await transcribeAlongCues(Buffer.from('mp4'), CUES);
+
+    expect(spy).toHaveBeenCalled();
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('SECRET');
+  });
+
   it('does nothing when the transcript holds no usable cues', async () => {
     const result = await transcribeAlongCues(Buffer.from('mp4'), parseVtt('WEBVTT\n\n'));
     expect(result).toEqual({ segments: [], batches: 0, emptyBatches: 0 });

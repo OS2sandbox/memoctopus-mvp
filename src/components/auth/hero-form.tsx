@@ -48,7 +48,7 @@ function EyeIcon({ off }: { off: boolean }) {
   );
 }
 
-// Generic OIDC providers are operator-configured, so we can't ship a logo for
+// Generic OIDC and SAML providers are operator-configured, so we can't ship a logo for
 // them — an unbranded button is the existing fallback.
 function ProviderIcon({ provider }: { provider: AuthProvider }) {
   if (provider.kind !== 'social') return null;
@@ -67,7 +67,9 @@ export function HeroForm({ providers, emailPasswordEnabled }: HeroFormProps) {
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get('from') || '/dashboard';
+  // Only a same-origin path is a valid return target: '//evil.example' and '/\\evil.example' are not.
+  const rawFrom = searchParams.get('from');
+  const from = rawFrom && /^\/(?![/\\])/.test(rawFrom) ? rawFrom : '/dashboard';
   const { isLoading, mode, email, password, name, error } = state;
   const isSignUp = mode === AuthMode.SignUp;
 
@@ -82,7 +84,9 @@ export function HeroForm({ providers, emailPasswordEnabled }: HeroFormProps) {
     try {
       const { error } = await (provider.kind === 'social'
         ? signIn.social({ provider: provider.id, callbackURL: from })
-        : authClient.signIn.oauth2({ providerId: provider.id, callbackURL: from }));
+        : provider.kind === 'sso'
+          ? authClient.signIn.sso({ providerId: provider.id, callbackURL: from })
+          : authClient.signIn.oauth2({ providerId: provider.id, callbackURL: from }));
       if (error) failed();
     } catch {
       failed();

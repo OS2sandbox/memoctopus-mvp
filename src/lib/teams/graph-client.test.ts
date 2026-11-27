@@ -12,6 +12,11 @@ vi.mock('@/lib/auth', () => ({
   },
 }));
 
+const scrubMicrosoftIdToken = vi.fn();
+vi.mock('@/lib/authz/account-tokens', () => ({
+  scrubMicrosoftIdToken: (...args: unknown[]) => scrubMicrosoftIdToken(...args),
+}));
+
 import {
   GRAPH_DOWNLOAD_TIMEOUT_MS,
   GRAPH_TIMEOUT_MS,
@@ -68,6 +73,7 @@ function deferred<T>() {
 beforeEach(() => {
   getAccessToken.mockReset();
   refreshToken.mockReset();
+  scrubMicrosoftIdToken.mockReset();
   process.env.TEAMS_GRAPH_ENABLED = 'true';
   delete process.env.TEAMS_ARTIFACT_MODE;
   delete process.env.TEAMS_DELETE_RECORDING;
@@ -140,6 +146,12 @@ describe('getGraphAccessToken', () => {
     expect(getAccessToken).toHaveBeenCalledWith({
       body: { providerId: 'microsoft', userId: 'user-123' },
     });
+  });
+
+  it('scrubs the id token better-auth may have stored when it refreshed, after every token fetch', async () => {
+    okToken();
+    await getGraphAccessToken('user-123');
+    expect(scrubMicrosoftIdToken).toHaveBeenCalledWith('user-123');
   });
 
   it('accepts a comma-joined scope string, as better-auth stores it', async () => {
@@ -632,6 +644,7 @@ describe('graphFetch — a Graph 401', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(bearer(0)).toBe('Bearer stale');
     expect(bearer(1)).toBe('Bearer fresh');
+    expect(scrubMicrosoftIdToken).toHaveBeenCalledTimes(3); // after each token fetch (2) and after the forced refresh
   });
 
   it('skips the forced refresh when someone else already replaced the token', async () => {

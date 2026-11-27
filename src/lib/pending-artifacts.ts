@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import type { TranscriptSegment } from '@/types';
+import { recordTeamsStashDelete } from '@/lib/teams/audit';
+import { safeLogError } from '@/lib/audit/safe-log';
 import { assertSafeMeetingId } from '@/lib/teams/meeting-id';
 
 // Transient server-side hand-off for artifacts produced without a browser present.
@@ -68,7 +70,7 @@ export async function getMeetingOwner(meetingId: string): Promise<string | null>
     return userId ?? null;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[pending-artifacts] readOwner failed for', meetingId, err);
+      safeLogError(`pending-artifacts readOwner ${meetingId}`, err);
     }
     return null;
   }
@@ -96,6 +98,19 @@ export interface PendingTranscript {
   /** Whether speaker turns were merged in (false → client may diarize itself). */
   diarized?: boolean;
   createdAt: number;
+}
+
+/**
+ * Removes the transcript file and says what happened, so a deletion of a READY transcript can be
+ * audited (teams.stash_delete) only when this call really removed it, and as an error when it could not.
+ */
+async function removeTranscriptFile(meetingId: string): Promise<'removed' | 'absent' | 'failed'> {
+  try {
+    await fs.unlink(transcriptPath(meetingId));
+    return 'removed';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed';
+  }
 }
 
 type StashKind = 'meta' | 'transcript' | 'owner';
@@ -152,6 +167,7 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
       [...byId].map(async ([id, files]) => {
         let newest = 0;
         let inProgress = false;
+        let readyTranscript = false;
         for (const f of Object.values(files)) {
           const file = path.join(dir, f);
           let rec: { createdAt?: unknown; status?: string } | null = null;
@@ -161,7 +177,7 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
             // ENOENT: the file went away between readdir and read. Anything else
             // (half-written, malformed) is aged by its modification time below.
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              console.error('[pending-artifacts] sweep: unreadable file, aging it by mtime', f, err);
+              safeLogError(`pending-artifacts sweep ${id}: unreadable stash file, aging it by mtime`, err);
             }
           }
           const at = await fileTime(file, rec);
@@ -170,11 +186,18 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
           if (f.endsWith('.transcript.json') && rec?.status === 'processing') {
             inProgress = now - at <= RUN_IN_PROGRESS_MAX_MS;
           }
+          if (f.endsWith('.transcript.json') && rec?.status === 'ready') readyTranscript = true;
         }
         if (newest === 0 || inProgress || now - newest <= TTL_MS) return;
+        // Who the stash belonged to, read before the owner binding goes with it (the audit actor).
+        const owner = readyTranscript ? await getMeetingOwner(id) : null;
         await deletePendingMeta(id);
-        await deletePendingTranscript(id);
+        const removed = await removeTranscriptFile(id);
         await fs.unlink(ownerPath(id)).catch(() => {});
+        // Only a transcript with content is a server-held copy worth a row; a failed or half-written one holds none.
+        if (readyTranscript && removed !== 'absent') {
+          await recordTeamsStashDelete({ trigger: 'ttl', meetingId: id, userId: owner, failed: removed === 'failed' });
+        }
         swept += 1;
       }),
     );
@@ -189,12 +212,17 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
  * never delete the result of a re-collect that is under way. Returns false for
  * such a stale acknowledgement, true otherwise.
  */
-export async function acknowledgePendingTranscript(meetingId: string): Promise<boolean> {
+export async function acknowledgePendingTranscript(meetingId: string, actorUserId?: string): Promise<boolean> {
   assertSafeMeetingId(meetingId);
-  if ((await readPendingTranscript(meetingId))?.status === 'processing') return false;
+  const stashed = await readPendingTranscript(meetingId);
+  if (stashed?.status === 'processing') return false;
   await deletePendingMeta(meetingId);
-  await deletePendingTranscript(meetingId);
+  const removed = await removeTranscriptFile(meetingId);
   await fs.unlink(ownerPath(meetingId)).catch(() => {});
+  // Audited only when this call took a transcript with content off the server (an idempotent repeat does not).
+  if (stashed?.status === 'ready' && removed !== 'absent') {
+    await recordTeamsStashDelete({ trigger: 'handoff', meetingId, userId: actorUserId, failed: removed === 'failed' });
+  }
   return true;
 }
 
@@ -223,7 +251,7 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
     return JSON.parse(await fs.readFile(metaPath(meetingId), 'utf8')) as PendingMeta;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[pending-artifacts] readPendingMeta failed for', meetingId, err);
+      safeLogError(`pending-artifacts readPendingMeta ${meetingId}`, err);
     }
     return null;
   }
@@ -255,7 +283,7 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
     return JSON.parse(await fs.readFile(transcriptPath(meetingId), 'utf8')) as PendingTranscript;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[pending-artifacts] readPendingTranscript failed for', meetingId, err);
+      safeLogError(`pending-artifacts readPendingTranscript ${meetingId}`, err);
     }
     return null;
   }

@@ -25,7 +25,7 @@ import { outlookAddinConfig } from '@/lib/auth/providers';
 
 export const ADDIN_SCOPE = 'access_as_user';
 
-export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account' | 'unavailable';
+export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account' | 'forbidden' | 'unavailable';
 
 /** Danish, user-safe: shown in the add-in's pane. */
 const MESSAGES: Record<AddinAuthErrorCode, string> = {
@@ -34,6 +34,7 @@ const MESSAGES: Record<AddinAuthErrorCode, string> = {
   invalid_token: 'Dit Microsoft-login kunne ikke godkendes. Luk ruden og prøv igen.',
   no_account:
     'Du skal logge ind på OS2taletiltekst med Microsoft én gang, før du kan bruge knappen i Outlook.',
+  forbidden: 'Du har ikke adgang til OS2taletiltekst. Kontakt din administrator, hvis det er en fejl.',
   unavailable: 'OS2taletiltekst kan ikke tjekke dit Microsoft-login lige nu. Prøv igen om lidt.',
 };
 
@@ -42,6 +43,7 @@ const STATUS: Record<AddinAuthErrorCode, number> = {
   missing_token: 401,
   invalid_token: 401,
   no_account: 403,
+  forbidden: 403,
   unavailable: 503,
 };
 

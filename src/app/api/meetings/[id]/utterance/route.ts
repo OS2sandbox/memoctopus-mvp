@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { HviskeProvider } from '@/lib/ai/transcription';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { requireAppAccess } from '@/lib/authz/app-access';
+import { elapsedMs, emitLiveAudioUpload, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { asEntityUuid } from '@/lib/ids';
 import { cleanTranscribedText } from '@/lib/audio/hallucinations';
+
+interface Params {
+  params: Promise<{ id: string }>;
+}
 
 // Reuse a single provider instance across requests — creating one per request
 // would spin up a new OpenAI client each time, losing connection pooling.
@@ -12,18 +19,15 @@ function getProvider(): HviskeProvider {
   return _provider;
 }
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
-
 // Per-utterance transcription for the VAD-based recording/upload path.
 // Stateless compute: transcribes one audio batch via Hviske and returns the text.
 // No persistence — the client accumulates segments and stores the transcript in
 // IndexedDB (see RecordingScreen / upload-confirm / ProcessingTranscription).
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: _id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function postHandler(req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -38,16 +42,29 @@ export async function POST(req: NextRequest, { params }: Params) {
     const { text, latencyMs } = await getProvider().transcribeRaw(buffer, audioFile.type || 'audio/wav');
     const totalMs = Date.now() - t0;
     console.log(`[utterance] ${audioBytes} bytes → ${latencyMs} ms hviske / ${totalMs} ms total`);
+    // The audio of a live recording goes up utterance by utterance: logged at most once per
+    // person and meeting per 5 minutes (see emitLiveAudioUpload), never the audio or the text.
+    emitLiveAudioUpload(req, { actorUserId: session.user.id, entityId: asEntityUuid(id), outcome: 'success', bytes: audioBytes, durationMs: elapsedMs(t0) });
     // The same cleaning as the batch path (vad-batch-server), so a live recording
     // and an upload of the same audio keep the same words: a repetition loop is
     // cut off after the real speech before it, and a subtitle credit is dropped.
     return NextResponse.json({ text: cleanTranscribedText(text ?? ''), latencyMs });
   } catch (err) {
     const totalMs = Date.now() - t0;
-    console.error(`[utterance] failed after ${totalMs} ms:`, err);
+    safeLogError(`utterance failed after ${totalMs} ms`, err);
+    emitLiveAudioUpload(req, {
+      actorUserId: session.user.id,
+      entityId: asEntityUuid(id),
+      outcome: 'error',
+      bytes: audioBytes,
+      durationMs: totalMs,
+      outcomeCode: outcomeCodeOf(err),
+    });
     // 502, not 200-with-empty-text: callers must be able to tell "silence" from
     // "transcription failed" so failed batches are retried instead of silently
     // dropping ~27 s of audio from the transcript.
     return NextResponse.json({ error: 'Transcription failed', latencyMs: totalMs }, { status: 502 });
   }
 }
+
+export const POST = withHandler('utterance', postHandler);

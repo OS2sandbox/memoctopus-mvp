@@ -1,5 +1,6 @@
 import { TranscriptSegment } from '@/types';
 import { getLlmClient, llmModel } from './llm-client';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Output cap for the chapter JSON: at most 14 chapters, each a title plus a
 // one-or-two sentence summary. Without it the model is handed whatever remains
@@ -109,7 +110,7 @@ Regler:
 
     return chapters;
   } catch (err) {
-    console.error('[chapters] parse failed, using fallback:', err);
+    safeLogError('chapters parse failed', err);
     return [
       {
         id: 'ch-0',

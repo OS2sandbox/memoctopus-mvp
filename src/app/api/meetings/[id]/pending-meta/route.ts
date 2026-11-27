@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { readPendingMeta, assertMeetingOwner } from '@/lib/pending-artifacts';
 import { withHandler } from '@/lib/api-handler';
 
@@ -29,8 +28,9 @@ export const GET = withHandler(
     _req: NextRequest,
     { params }: { params: Promise<{ id: string }> },
   ) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { id: meetingId } = await params;
 

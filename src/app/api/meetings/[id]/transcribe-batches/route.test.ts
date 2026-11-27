@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -21,6 +28,12 @@ vi.mock('@/lib/audio/vad-batch-server', () => ({
 }));
 
 import { NextRequest } from 'next/server';
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
@@ -135,5 +148,78 @@ describe('POST /api/meetings/[id]/transcribe-batches', () => {
     const done = events.at(-1) as Record<string, unknown>;
     expect(done).toMatchObject({ type: 'done', diarized: true });
     expect((done.segments as unknown[]).length).toBe(2);
+  });
+});
+
+describe('audit', () => {
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
+  const events = () => mockRecord.mock.calls.map((c) => c[1] as Record<string, unknown>);
+
+  beforeEach(() => {
+    mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+  });
+
+  it('records the upload (size, time, meeting) once the stream is done, in the VAD and the ensemble path', async () => {
+    mockPrepare.mockResolvedValueOnce([FAKE_BATCH]);
+    mockTranscribe.mockResolvedValueOnce({
+      segments: [{ speaker: 'Taler 1', start: 0, end: 5, text: 'hemmelig tekst' }],
+      totalBatches: 1, totalSpeechSeconds: 27, failedSeconds: 0,
+    });
+    await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
+    mockIsEnsemble.mockReturnValue(true);
+    mockEnsemble.mockResolvedValueOnce([{ speaker: 'Taler 1', start: 0, end: 3, text: 'hemmelig' }]);
+    await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
+
+    expect(events()).toHaveLength(2);
+    for (const e of events()) {
+      expect(e).toMatchObject({
+        type: 'audio.upload',
+        actorUserId: FAKE_SESSION.user.id,
+        entityId: MEETING,
+        details: { channel: 'batch', bytes: 5_000, durationMs: expect.any(Number) },
+      });
+      expect(e.outcome ?? 'success').toBe('success');
+    }
+    // Metadata only: the transcript never reaches the audit log.
+    expect(JSON.stringify(events())).not.toContain('hemmelig');
+  });
+
+  it('says upload for a file the person chose and batch for a recording (a client hint, whitelisted)', async () => {
+    const withChannel = (channel?: string) => {
+      const fd = new FormData();
+      fd.append('audio', new File([Buffer.alloc(5_000, 1)], 'recording', { type: 'audio/webm' }));
+      if (channel) fd.append('channel', channel);
+      return new NextRequest(BASE_URL, { method: 'POST', body: fd });
+    };
+    mockPrepare.mockResolvedValue([FAKE_BATCH]);
+    mockTranscribe.mockResolvedValue({ segments: [], totalBatches: 1, totalSpeechSeconds: 27, failedSeconds: 0 });
+    await readEvents(await POST(withChannel('upload'), UUID_PARAMS));
+    await readEvents(await POST(withChannel(), UUID_PARAMS));
+    await readEvents(await POST(withChannel('live'), UUID_PARAMS));
+    expect(events().map((e) => (e.details as { channel: string }).channel)).toEqual(['upload', 'batch', 'batch']);
+  });
+
+  it('records an error outcome with a closed code when transcription fails (the stream still reports the error)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockPrepare.mockRejectedValueOnce(Object.assign(new Error('ffmpeg failed: Jensens barn'), { status: 502 }));
+    expect((await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS))).at(-1)).toMatchObject({ type: 'error' });
+    spy.mockRestore();
+    expect(events()).toHaveLength(1);
+    expect(events()[0]).toMatchObject({ type: 'audio.upload', outcome: 'error', details: { channel: 'batch', outcomeCode: 'http_502' } });
+    expect(JSON.stringify(events())).not.toContain('Jensen');
+  });
+
+  it('uses no entity for a meeting id that is not a uuid, and records nothing for rejected input', async () => {
+    mockPrepare.mockResolvedValueOnce([]);
+    mockTranscribe.mockResolvedValueOnce({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
+    await readEvents(await POST(makeAudioRequest(5_000), PARAMS));
+    expect(events()[0].entityId).toBeUndefined();
+    mockRecord.mockClear();
+    await POST(new NextRequest(BASE_URL, { method: 'POST', body: new FormData() }), PARAMS);
+    await POST(makeAudioRequest(1_999), PARAMS);
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

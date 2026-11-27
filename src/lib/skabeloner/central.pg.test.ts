@@ -1,0 +1,889 @@
+// Needs a real Postgres 15+; skipped unless TEST_DATABASE_URL is set (see src/test/pg.ts).
+// Proves what the mocked tests cannot: atomicity of template + targets + version
+// + audit, the row lock under concurrent writers, the creator rule over real
+// rows, the immutability trigger and the RESTRICT FKs. The service
+// runs unchanged in a throwaway schema through CentralEnv.schema.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Client } from 'pg';
+import type { z } from 'zod';
+import { hasPg, withFreshSchema } from '@/test/pg';
+import { makePrincipal } from '@/test/helpers';
+import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from '@/lib/authz/pg-runner';
+
+// The audit actor snapshot reads through the app's Drizzle `db`; here it is absent, which record.ts tolerates (null name).
+vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
+const recordAuthzDenied = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied }));
+
+import { deleteOrgUnit } from '@/lib/authz/access-admin';
+import { ForbiddenError, NotFoundError, VersionConflictError } from '@/lib/authz/access-errors';
+import type { Principal } from '@/lib/authz/types';
+import * as service from './central';
+import {
+  getManageableTemplate,
+  listCatalogue,
+  listManageableTemplates,
+  listAudienceOrgUnits,
+  listVersions,
+  type CentralEnv,
+} from './central';
+import { centralStateChangeSchema, createCentralTemplateSchema, updateCentralTemplateSchema } from './central-schemas';
+
+// The routes parse every body once, at the edge (http.ts parseBody), and the service takes the
+// parsed output; these tests parse their raw objects the same way first.
+const createCentralTemplate = async (p: Principal, raw: z.input<typeof createCentralTemplateSchema>, env?: CentralEnv) =>
+  service.createCentralTemplate(p, createCentralTemplateSchema.parse(raw), env);
+const updateCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof updateCentralTemplateSchema>, env?: CentralEnv) =>
+  service.updateCentralTemplate(p, id, updateCentralTemplateSchema.parse(raw), env);
+const archiveCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof centralStateChangeSchema>, env?: CentralEnv) =>
+  service.archiveCentralTemplate(p, id, centralStateChangeSchema.parse(raw), env);
+const restoreCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof centralStateChangeSchema>, env?: CentralEnv) =>
+  service.restoreCentralTemplate(p, id, centralStateChangeSchema.parse(raw), env);
+
+const NOTE = 'Opdateret efter dialog med afdelingen';
+
+/** SqlRunner over the throwaway schema; every transaction gets its own connection so row locks really contend. */
+function makeRunner(base: Client, schema: string, opts: { rewritePublic?: boolean } = {}) {
+  const rewrite = (sql: string) => (opts.rewritePublic ? sql.replaceAll('public.', `"${schema}".`) : sql);
+  const wrap = (c: Client) => ({
+    query: (sql: string, params?: readonly unknown[]) =>
+      c.query(rewrite(sql), params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
+  });
+  const extra: Client[] = [];
+  const runner: SqlRunner = createRunner(wrap(base), async (): Promise<ClientLike> => {
+    const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
+    await c.connect();
+    await c.query(`SET search_path TO "${schema}"`);
+    extra.push(c);
+    return { ...wrap(c), release: () => void c.end().catch(() => {}) };
+  });
+  return { runner, close: async () => void (await Promise.allSettled(extra.map((c) => c.end().catch(() => {})))) };
+}
+
+async function unit(c: Client, name: string, parent: string | null = null): Promise<string> {
+  const r = await c.query(`INSERT INTO org_units (name, parent_uuid, source) VALUES ($1, $2, 'local') RETURNING uuid`, [name, parent]);
+  return r.rows[0].uuid;
+}
+
+async function user(c: Client, id: string, name = id) {
+  await c.query('INSERT INTO users (id, name, email) VALUES ($1, $2, $3)', [id, name, `${id}@example.dk`]);
+}
+
+/** A bygger: manages the templates they created. */
+const bygger = (userId: string): Principal =>
+  makePrincipal({
+    userId,
+    roles: ['bygger'],
+    capabilities: ['template.use', 'template.manage'],
+  });
+
+/** An administrator: template.manage_all, so every template. */
+const admin = (userId: string): Principal =>
+  makePrincipal({
+    userId,
+    roles: ['admin'],
+    capabilities: ['template.use', 'template.manage', 'template.manage_all'],
+  });
+
+/**
+ * Kommune
+ *   A ── A1 ── A11
+ *   B ── B1
+ */
+async function tree(c: Client) {
+  const root = await unit(c, 'Kommune');
+  const a = await unit(c, 'A', root);
+  const a1 = await unit(c, 'A1', a);
+  const a11 = await unit(c, 'A11', a1);
+  const b = await unit(c, 'B', root);
+  const b1 = await unit(c, 'B1', b);
+  return { root, a, a1, a11, b, b1 };
+}
+
+const count = async (c: Client, table: string, where = 'true', params: unknown[] = []) =>
+  (await c.query(`SELECT count(*)::int AS n FROM ${table} WHERE ${where}`, params)).rows[0].n as number;
+
+const BASE = { name: 'Dialogmøde', description: 'Til dialogmøder', prompt: 'Skriv et kort referat af mødet.', includeBeslutningspunkter: true };
+
+// Statements that are expected to fail are sent without bind parameters (ids are test-generated uuids,
+// inlined): the simple protocol keeps the connection usable for the next assertion on every Postgres,
+// including the embedded one some developers use for this lane.
+async function expectSqlState(p: Promise<unknown>, state: string | string[]) {
+  const allowed = Array.isArray(state) ? state : [state];
+  const err = await p.then(() => undefined, (e: unknown) => e as { code?: string });
+  expect(err, 'statement should have failed').toBeDefined();
+  expect(allowed).toContain(err!.code);
+}
+
+beforeEach(() => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
+  it('migration 0003 applies after 0000-0002: tables exist, the trigger function exists', () =>
+    withFreshSchema(async (c, schema) => {
+      const t = await c.query(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name LIKE 'central_template%' ORDER BY 1`,
+        [schema],
+      );
+      expect(t.rows.map((r) => r.table_name)).toEqual([
+        'central_template_principal_targets',
+        'central_template_targets',
+        'central_template_versions',
+        'central_templates',
+      ]);
+      const f = await c.query(
+        `SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.proname = 'central_template_versions_guard'`,
+        [schema],
+      );
+      expect(f.rows).toHaveLength(1);
+    }));
+
+  describe('create', () => {
+    it('writes template, targets, version 1 and the audit event, and returns the admin view', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        await user(c, 'mgr', 'Mikkel Manager');
+
+        const out = await createCentralTemplate(
+          bygger('mgr'),
+          { ...BASE, targets: [{ orgUnitUuid: t.a1 }, { orgUnitUuid: t.a, includeDescendants: false }], changeNote: `  ${NOTE}  ` },
+          env,
+        );
+
+        expect(out).toMatchObject({
+          name: 'Dialogmøde',
+          prompt: BASE.prompt,
+          status: 'active',
+          currentVersion: 1,
+          allowUserInstruction: false,
+          allowToggleOverrides: false,
+          createdByName: 'Mikkel Manager',
+          lastEditedByName: 'Mikkel Manager',
+        });
+        expect([...out.targets].map((x) => x.orgUnitUuid).sort()).toEqual([t.a, t.a1].sort());
+
+        const row = (await c.query('SELECT * FROM central_templates')).rows[0];
+        // The creator owns the template; there is no owner unit any more.
+        expect(row.created_by_user_id).toBe('mgr');
+        expect(row).not.toHaveProperty('owner_org_unit_uuid');
+        expect(row.current_version).toBe(1);
+
+        const v = (await c.query('SELECT * FROM central_template_versions')).rows;
+        expect(v).toHaveLength(1);
+        expect(v[0]).toMatchObject({ version: 1, change_type: 'create', change_note: NOTE, changed_by_user_id: 'mgr', changed_by_name: 'Mikkel Manager' });
+        expect(v[0].content).toMatchObject({ name: 'Dialogmøde', prompt: BASE.prompt, includeBeslutningspunkter: true });
+        expect(v[0].targets).toHaveLength(2);
+
+        const a = (await c.query(`SELECT * FROM audit_events WHERE event_type = 'central_template.create'`)).rows;
+        expect(a).toHaveLength(1);
+        expect(a[0]).toMatchObject({
+          actor_user_id: 'mgr',
+          entity_type: 'central_template',
+          entity_id: out.id,
+          secondary_entity_type: null,
+          secondary_entity_id: null,
+          outcome: 'success',
+        });
+        expect(a[0].details).toEqual({ version: 1, targetCount: 2, principalTargetCount: 0 });
+        await close();
+      }));
+
+    it('is atomic: if the audit write fails nothing of the template, targets or version stays', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const failing: SqlRunner = {
+          query: (s, p) => runner.query(s, p),
+          transaction: (fn) =>
+            runner.transaction((tx) =>
+              fn({
+                query: (sql, params) =>
+                  sql.includes('audit_events') ? Promise.reject(new Error('audit down')) : tx.query(sql, params),
+              }),
+            ),
+        };
+        const t = await tree(c);
+        await expect(
+          createCentralTemplate(bygger('mgr'), { ...BASE, targets: [{ orgUnitUuid: t.a1 }], changeNote: NOTE }, { schema, runner: failing }),
+        ).rejects.toThrow('audit down');
+        expect(await count(c, 'central_templates')).toBe(0);
+        expect(await count(c, 'central_template_targets')).toBe(0);
+        expect(await count(c, 'central_template_versions')).toBe(0);
+        await close();
+      }));
+
+    it('the table itself refuses a short or blank note, an unknown change type and a blank prompt (defence in depth)', () =>
+      withFreshSchema(async (c) => {
+        const tpl = (await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', 'p') RETURNING id`)).rows[0].id;
+        const ins = (changeType: string, note: string) =>
+          c.query(`INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ('${tpl}', 1, '${changeType}', '${note}', '{}', '[]')`);
+        await expectSqlState(ins('create', 'kort'), '23514');
+        await expectSqlState(ins('create', '         '), '23514'); // 9 characters
+        await expectSqlState(ins('delete', 'en lang nok note'), '23514');
+        await ins('create', 'en lang nok note');
+        await expectSqlState(c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', '   ')`), '23514');
+        await expectSqlState(c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt, status) VALUES ('mgr', 'x', 'p', 'deleted')`), '23514');
+      }));
+
+    describe('table CHECKs are plain length bounds (the meaningful-character rule is app-side only)', () => {
+      const insertVersion = (c: Client, tpl: string, note: string, version = 1) =>
+        c.query(
+          `INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ($1, $3, 'create', $2, '{}', '[]')`,
+          [tpl, note, version],
+        );
+      const newTemplate = async (c: Client) => {
+        const r = await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', 'p') RETURNING id`);
+        return { tpl: r.rows[0].id as string };
+      };
+
+      it('accepts a normal note, ten emoji and Danish letters, refuses fewer than 10 characters', () =>
+        withFreshSchema(async (c) => {
+          const { tpl } = await newTemplate(c);
+          await insertVersion(c, tpl, 'Rettet tone i afsnit 2', 1);
+          await insertVersion(c, tpl, '😀'.repeat(10), 2);
+          await insertVersion(c, tpl, 'æøåÆØÅ æøå æøå', 3);
+          await expectSqlState(insertVersion(c, tpl, 'x'.repeat(9), 4), '23514');
+          expect(await count(c, 'central_template_versions')).toBe(3);
+        }));
+
+      it('refuses a note over 2000 characters and accepts exactly 2000', () =>
+        withFreshSchema(async (c) => {
+          const { tpl } = await newTemplate(c);
+          await expectSqlState(insertVersion(c, tpl, 'y'.repeat(2001)), '23514');
+          await insertVersion(c, tpl, 'y'.repeat(2000));
+        }));
+
+      it('refuses an empty template name', () =>
+        withFreshSchema(async (c) => {
+          await expectSqlState(c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', '', 'p')`), '23514');
+        }));
+
+      it('accepts a one-character name, a Danish name and the 120 character cap, and refuses 121', () =>
+        withFreshSchema(async (c) => {
+          const ins = (name: string) => c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', $1, 'p')`, [name]);
+          await ins('x');
+          await ins('Møde på Å');
+          await ins('n'.repeat(120));
+          await expectSqlState(ins('n'.repeat(121)), '23514');
+        }));
+
+      it('has a created_by_user_id column and no owner_org_unit_uuid on central_templates', () =>
+        withFreshSchema(async (c, schema) => {
+          const r = await c.query(
+            `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'central_templates' AND column_name IN ('created_by_user_id', 'owner_org_unit_uuid')`,
+            [schema],
+          );
+          expect(r.rows.map((x) => x.column_name)).toEqual(['created_by_user_id']);
+        }));
+    });
+
+    it('any existing unit may be targeted (parent, root, other branch); an unknown unit is refused and nothing is written', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        const p = bygger('mgr');
+        await expect(
+          createCentralTemplate(p, { ...BASE, targets: [{ orgUnitUuid: t.a1 }, { orgUnitUuid: '99999999-9999-4999-8999-999999999999' }], changeNote: NOTE }, env),
+        ).rejects.toMatchObject({ code: 'target_unknown' });
+        expect(await count(c, 'central_templates')).toBe(0);
+
+        const ok = await createCentralTemplate(
+          p,
+          { ...BASE, targets: [{ orgUnitUuid: t.root }, { orgUnitUuid: t.a }, { orgUnitUuid: t.b1, includeDescendants: false }], changeNote: NOTE },
+          env,
+        );
+        expect(ok.targets).toHaveLength(3);
+        await close();
+      }));
+
+    it('refuses a caller without template.manage (403) and writes nothing', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await expect(createCentralTemplate(makePrincipal(), { ...BASE, changeNote: NOTE }, env)).rejects.toBeInstanceOf(ForbiddenError);
+        expect(await count(c, 'central_templates')).toBe(0);
+        await close();
+      }));
+  });
+
+  describe('update and optimistic concurrency', () => {
+    async function seeded(c: Client, schema: string) {
+      const made = makeRunner(c, schema);
+      const env: CentralEnv = { schema, runner: made.runner };
+      const t = await tree(c);
+      await user(c, 'mgr', 'Mikkel Manager');
+      await user(c, 'colleague', 'Karen Kollega');
+      const mgr = bygger('mgr');
+      const tpl = await createCentralTemplate(mgr, { ...BASE, targets: [{ orgUnitUuid: t.a1 }], changeNote: 'Første version til afdelingen' }, env);
+      return { env, t, mgr, tpl, close: made.close };
+    }
+
+    it('bumps the version and appends a version row with the full snapshot', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, mgr, tpl, close } = await seeded(c, schema);
+        const out = await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, prompt: 'Skriv et langt referat.', includeDato: true }, env);
+        expect(out).toMatchObject({ currentVersion: 2, prompt: 'Skriv et langt referat.', includeDato: true, name: 'Dialogmøde' });
+
+        const v = (await c.query('SELECT * FROM central_template_versions ORDER BY version')).rows;
+        expect(v.map((r) => [r.version, r.change_type])).toEqual([[1, 'create'], [2, 'update']]);
+        expect(v[1]).toMatchObject({ change_note: NOTE, changed_by_name: 'Mikkel Manager' });
+        expect(v[1].content).toMatchObject({ prompt: 'Skriv et langt referat.', includeDato: true, name: 'Dialogmøde', description: 'Til dialogmøder', includeBeslutningspunkter: true });
+
+        const a = (await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.update'`)).rows;
+        expect(a).toHaveLength(1);
+        expect(a[0].details).toEqual({ version: 2, changedFields: ['prompt', 'includeDato'] });
+        expect((await c.query('SELECT updated_at > created_at AS touched FROM central_templates')).rows[0].touched).toBe(true);
+        await close();
+      }));
+
+    it('a stale baseVersion is a conflict carrying the current version, and nothing is written', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, mgr, tpl, close } = await seeded(c, schema);
+        await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn' }, env);
+        const versionsBefore = await count(c, 'central_template_versions');
+        const auditBefore = await count(c, 'audit_events');
+
+        const err = await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Mit navn' }, env).catch((e) => e);
+        expect(err).toBeInstanceOf(VersionConflictError);
+        expect(err).toMatchObject({ code: 'version_conflict', currentVersion: 2 });
+
+        expect(await count(c, 'central_template_versions')).toBe(versionsBefore);
+        expect(await count(c, 'audit_events')).toBe(auditBefore);
+        expect((await c.query('SELECT name, current_version FROM central_templates')).rows[0]).toEqual({ name: 'Nyt navn', current_version: 2 });
+        await close();
+      }));
+
+    it('two concurrent updates with the same baseVersion: exactly one succeeds, the other conflicts', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, mgr, tpl, close } = await seeded(c, schema);
+        // Two writers who may both edit it: the creator and an administrator.
+        const colleague = admin('colleague');
+        const results = await Promise.allSettled([
+          updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: 'Ændring fra den første leder', prompt: 'Prompt fra leder et.' }, env),
+          updateCentralTemplate(colleague, tpl.id, { baseVersion: 1, changeNote: 'Ændring fra den anden leder', prompt: 'Prompt fra leder to.' }, env),
+        ]);
+        const ok = results.filter((r) => r.status === 'fulfilled');
+        const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+        expect(ok).toHaveLength(1);
+        expect(failed).toHaveLength(1);
+        expect(failed[0].reason).toBeInstanceOf(VersionConflictError);
+        expect(failed[0].reason.currentVersion).toBe(2);
+
+        expect(await count(c, 'central_template_versions')).toBe(2);
+        expect(await count(c, 'audit_events', `event_type = 'central_template.update'`)).toBe(1);
+        const row = (await c.query('SELECT prompt, current_version FROM central_templates')).rows[0];
+        expect(row.current_version).toBe(2);
+        const winner = (await c.query(`SELECT change_note, content FROM central_template_versions WHERE version = 2`)).rows[0];
+        expect(winner.content.prompt).toBe(row.prompt);
+        await close();
+      }));
+
+    it('a targets-only change is a retarget (version row and audit event), content stays', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, mgr, tpl, t, close } = await seeded(c, schema);
+        const out = await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: 'Flyttet til hele afdelingen', targets: [{ orgUnitUuid: t.a, includeDescendants: true }] }, env);
+        expect(out.targets).toEqual([{ orgUnitUuid: t.a, includeDescendants: true }]);
+        expect(out).toMatchObject({ currentVersion: 2, prompt: BASE.prompt });
+
+        expect((await c.query(`SELECT change_type, targets FROM central_template_versions WHERE version = 2`)).rows[0]).toMatchObject({
+          change_type: 'retarget',
+          targets: [{ orgUnitUuid: t.a, includeDescendants: true }],
+        });
+        expect((await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.retarget'`)).rows[0].details).toEqual({ version: 2, targetCount: 1, principalTargetCount: 0 });
+        expect(await count(c, 'audit_events', `event_type = 'central_template.update'`)).toBe(0);
+        expect(await count(c, 'central_template_targets')).toBe(1);
+
+        // Content plus targets together is an update that names both.
+        await updateCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: 'Nyt navn og ingen modtagere', name: 'Andet navn', targets: [] }, env);
+        expect((await c.query(`SELECT change_type FROM central_template_versions WHERE version = 3`)).rows[0].change_type).toBe('update');
+        expect((await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.update'`)).rows[0].details).toEqual({ version: 3, changedFields: ['name', 'targets'] });
+        expect(await count(c, 'central_template_targets')).toBe(0);
+        await close();
+      }));
+
+    it('an unknown target unit is refused and the old targets stay', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, mgr, tpl, t, close } = await seeded(c, schema);
+        await expect(
+          updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, targets: [{ orgUnitUuid: '99999999-9999-4999-8999-999999999999' }] }, env),
+        ).rejects.toMatchObject({ code: 'target_unknown' });
+        expect((await c.query('SELECT org_unit_uuid FROM central_template_targets')).rows).toEqual([{ org_unit_uuid: t.a1 }]);
+        expect(await count(c, 'central_template_versions')).toBe(1);
+        await close();
+      }));
+
+    it('another bygger cannot edit (404); an administrator can, and the changelog names them', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, tpl, close } = await seeded(c, schema);
+        await expect(updateCentralTemplate(bygger('colleague'), tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Nej' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        const out = await updateCentralTemplate(admin('colleague'), tpl.id, { baseVersion: 1, changeNote: 'Rettet af en administrator', name: 'Admins navn' }, env);
+        expect(out.name).toBe('Admins navn');
+        const v = (await c.query('SELECT changed_by_user_id, changed_by_name FROM central_template_versions WHERE version = 2')).rows[0];
+        expect(v).toEqual({ changed_by_user_id: 'colleague', changed_by_name: 'Karen Kollega' });
+        // Editing does not move the ownership: the creator still manages it.
+        expect((await c.query('SELECT created_by_user_id FROM central_templates')).rows[0].created_by_user_id).toBe('mgr');
+        await close();
+      }));
+
+    it('version snapshots keep the old content exactly after later edits', () =>
+      withFreshSchema(async (c, schema) => {
+        const { env, mgr, tpl, t, close } = await seeded(c, schema);
+        const v1 = {
+          name: 'Dialogmøde',
+          description: 'Til dialogmøder',
+          prompt: BASE.prompt,
+          includeDeltagere: false,
+          includeBeslutningspunkter: true,
+          includeDagsorden: false,
+          includeDato: false,
+          allowUserInstruction: false,
+          allowToggleOverrides: false,
+        };
+        await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, prompt: 'Helt ny prompt.', allowUserInstruction: true }, env);
+        await updateCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE, name: 'Omdøbt', targets: [{ orgUnitUuid: t.a11 }] }, env);
+
+        const versions = await listVersions(mgr, tpl.id, env);
+        expect(versions.map((v) => v.version)).toEqual([3, 2, 1]);
+        expect(versions[2].content).toEqual(v1);
+        expect(versions[2].targets).toEqual([{ orgUnitUuid: t.a1, includeDescendants: true }]);
+        expect(versions[1].content).toMatchObject({ prompt: 'Helt ny prompt.', allowUserInstruction: true, name: 'Dialogmøde' });
+        expect(versions[0]).toMatchObject({ changeType: 'update', changedByName: 'Mikkel Manager', changeNote: NOTE });
+        expect(versions[0].content.name).toBe('Omdøbt');
+        expect(versions[0].targets).toEqual([{ orgUnitUuid: t.a11, includeDescendants: true }]);
+        await close();
+      }));
+  });
+
+  describe('refusals leave an authz.denied row, written after the rollback', () => {
+    it("another bygger's write or a stale one is refused, rolled back and reported once each, with the template as entity", () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const mgrA = bygger('a');
+        const mgrB = bygger('b');
+        const own = await createCentralTemplate(mgrB, { ...BASE, changeNote: NOTE }, env);
+        const before = await count(c, 'audit_events');
+        recordAuthzDenied.mockClear();
+
+        await expect(updateCentralTemplate(mgrA, own.id, { baseVersion: 1, changeNote: NOTE, name: 'X' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(updateCentralTemplate(mgrB, own.id, { baseVersion: 7, changeNote: NOTE, name: 'X' }, env)).rejects.toBeInstanceOf(VersionConflictError);
+        // An id that does not exist is not a refusal.
+        await expect(archiveCentralTemplate(mgrA, '99999999-9999-4999-8999-999999999999', { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+
+        expect(recordAuthzDenied.mock.calls.map((x) => x[0])).toEqual([
+          { actorUserId: 'a', required: 'template.manage', reason: 'not_owner', entityType: 'central_template', entityId: own.id },
+          { actorUserId: 'b', required: 'template.manage', reason: 'version_conflict', entityType: 'central_template', entityId: own.id },
+        ]);
+        // Nothing of the refused writes was kept, and no central_template.* event was written for them.
+        expect(await count(c, 'audit_events')).toBe(before);
+        expect((await c.query('SELECT current_version FROM central_templates WHERE id = $1', [own.id])).rows[0].current_version).toBe(1);
+        await close();
+      }));
+  });
+
+  describe('ownership: 404 for anybody else, never a leak', () => {
+    it("bygger A cannot read, list, edit, archive or see the history of bygger B's template; an administrator sees both", () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const mgrA = bygger('a');
+        const mgrB = bygger('b');
+        const own = await createCentralTemplate(mgrB, { ...BASE, changeNote: NOTE }, env);
+        const mine = await createCentralTemplate(mgrA, { ...BASE, name: 'Min', changeNote: NOTE }, env);
+
+        await expect(getManageableTemplate(mgrA, own.id, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(listVersions(mgrA, own.id, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(updateCentralTemplate(mgrA, own.id, { baseVersion: 1, changeNote: NOTE, name: 'X' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(archiveCentralTemplate(mgrA, own.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+        // Same answer for an id that does not exist: existence is not revealed.
+        await expect(getManageableTemplate(mgrA, '99999999-9999-4999-8999-999999999999', env)).rejects.toBeInstanceOf(NotFoundError);
+        expect((await c.query('SELECT name, current_version, status FROM central_templates WHERE id = $1', [own.id])).rows[0]).toEqual({ name: 'Dialogmøde', current_version: 1, status: 'active' });
+
+        expect((await listManageableTemplates(mgrA, { status: 'all' }, env)).map((x) => x.id)).toEqual([mine.id]);
+        expect((await listManageableTemplates(mgrB, { status: 'all' }, env)).map((x) => x.id)).toEqual([own.id]);
+        expect((await listManageableTemplates(admin('g'), { status: 'all' }, env)).map((x) => x.id).sort()).toEqual([own.id, mine.id].sort());
+        expect(await listManageableTemplates(makePrincipal(), { status: 'all' }, env)).toEqual([]);
+        await close();
+      }));
+
+    it('a template without a recorded creator (its first version had no author) is for administrators only', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const id = (await c.query(`INSERT INTO central_templates (name, prompt) VALUES ('x', 'p') RETURNING id`)).rows[0].id;
+        await expect(getManageableTemplate(bygger('mgr'), id, env)).rejects.toBeInstanceOf(NotFoundError);
+        expect(await listManageableTemplates(bygger('mgr'), {}, env)).toEqual([]);
+        expect((await getManageableTemplate(admin('adm'), id, env)).id).toBe(id);
+        await close();
+      }));
+
+    it('shows creator and last editor (an administrator editing a bygger template) in list and detail, with the edit time', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await user(c, 'owner', 'Olga Ejer');
+        await user(c, 'anc', 'Anders Admin');
+        const created = await createCentralTemplate(bygger('owner'), { ...BASE, changeNote: NOTE }, env);
+        const [created1] = await listManageableTemplates(bygger('owner'), {}, env);
+        expect(created1).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Olga Ejer' });
+
+        await updateCentralTemplate(admin('anc'), created.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn' }, env);
+        const [item] = await listManageableTemplates(admin('anc'), {}, env);
+        expect(item).toMatchObject({ currentVersion: 2, createdByName: 'Olga Ejer', lastEditedByName: 'Anders Admin' });
+        const detail = await getManageableTemplate(admin('anc'), created.id, env);
+        expect(detail).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Anders Admin' });
+        const v2 = (await c.query('SELECT changed_at FROM central_template_versions WHERE version = 2')).rows[0];
+        expect(detail.lastEditedAt).toBe(new Date(v2.changed_at).toISOString());
+        expect(item.lastEditedAt).toBe(detail.lastEditedAt);
+        await close();
+      }));
+
+    it('lists every org unit for the audience picker, to any bygger; nothing without template.manage', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        const units = await listAudienceOrgUnits(bygger('a'), env);
+        expect(units.map((u) => u.name)).toEqual(['A', 'A1', 'A11', 'B', 'B1', 'Kommune']);
+        expect(units.find((u) => u.name === 'Kommune')!.parentUuid).toBeNull();
+        expect(units.find((u) => u.name === 'A1')!.parentUuid).toBe(t.a);
+        expect(await listAudienceOrgUnits(makePrincipal(), env)).toEqual([]);
+        await close();
+      }));
+  });
+
+  describe('archive and restore', () => {
+    it('round-trips with a version row each, changes status, and keeps content and targets', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        const mgr = bygger('mgr');
+        const tpl = await createCentralTemplate(mgr, { ...BASE, targets: [{ orgUnitUuid: t.a1 }], changeNote: NOTE }, env);
+
+        const archived = await archiveCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: 'Bruges ikke længere' }, env);
+        expect(archived).toMatchObject({ status: 'archived', currentVersion: 2, prompt: BASE.prompt });
+        expect((await listManageableTemplates(mgr, {}, env)).map((x) => x.id)).toEqual([]);
+        expect((await listManageableTemplates(mgr, { status: 'archived' }, env)).map((x) => x.id)).toEqual([tpl.id]);
+
+        await expect(updateCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE, name: 'X' }, env)).rejects.toMatchObject({ code: 'template_archived' });
+        await expect(archiveCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'already_archived' });
+
+        const restored = await restoreCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: 'Skal bruges igen' }, env);
+        expect(restored).toMatchObject({ status: 'active', currentVersion: 3 });
+        await expect(restoreCentralTemplate(mgr, tpl.id, { baseVersion: 3, changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'not_archived' });
+
+        const versions = await listVersions(mgr, tpl.id, env);
+        expect(versions.map((v) => [v.version, v.changeType, v.changeNote])).toEqual([
+          [3, 'restore', 'Skal bruges igen'],
+          [2, 'archive', 'Bruges ikke længere'],
+          [1, 'create', NOTE],
+        ]);
+        expect(versions[1].targets).toEqual([{ orgUnitUuid: t.a1, includeDescendants: true }]);
+        expect((await c.query(`SELECT event_type, details FROM audit_events WHERE event_type IN ('central_template.archive','central_template.restore') ORDER BY id`)).rows).toEqual([
+          { event_type: 'central_template.archive', details: { version: 2 } },
+          { event_type: 'central_template.restore', details: { version: 3 } },
+        ]);
+        // No hard delete exists in the service: the row is still there.
+        expect(await count(c, 'central_templates')).toBe(1);
+        await close();
+      }));
+  });
+
+  describe('the changelog is append-only', () => {
+    async function withVersion(c: Client) {
+      const id = (await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', 'p') RETURNING id`)).rows[0].id;
+      await c.query(`INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ($1, 1, 'create', 'en lang nok note', '{}', '[]')`, [id]);
+      return { id };
+    }
+
+    it('refuses UPDATE, DELETE and TRUNCATE with SQLSTATE 55000, and a template delete that would cascade', () =>
+      withFreshSchema(async (c) => {
+        const { id } = await withVersion(c);
+        await expectSqlState(c.query(`UPDATE central_template_versions SET change_note = 'noget helt andet her'`), '55000');
+        await expectSqlState(c.query(`UPDATE central_template_versions SET content = '{"x":1}'`), '55000');
+        await expectSqlState(c.query('DELETE FROM central_template_versions'), '55000');
+        await expectSqlState(c.query('TRUNCATE central_template_versions'), '55000');
+        // There is no prune bypass, not even for the setting audit_events honours.
+        await c.query(`SELECT set_config('audit.allow_prune', 'on', false)`);
+        await expectSqlState(c.query('DELETE FROM central_template_versions'), '55000');
+        // A hard delete of the template would cascade into the changelog and is refused too.
+        await expectSqlState(c.query(`DELETE FROM central_templates WHERE id = '${id}'`), '55000');
+        expect(await count(c, 'central_template_versions')).toBe(1);
+        expect(await count(c, 'central_templates')).toBe(1);
+      }));
+
+    it('still allows INSERT, and one version number per template (UNIQUE)', () =>
+      withFreshSchema(async (c) => {
+        const { id } = await withVersion(c);
+        await c.query(`INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ($1, 2, 'update', 'en lang nok note', '{}', '[]')`, [id]);
+        await expectSqlState(
+          c.query(`INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ('${id}', 2, 'update', 'en lang nok note', '{}', '[]')`),
+          '23505',
+        );
+      }));
+  });
+
+  describe('org unit deletion', () => {
+    it('deleteOrgUnit refuses a unit a template is aimed at (409 in Danish); a unit no template targets is deletable', () =>
+      withFreshSchema(async (c, schema) => {
+        vi.stubEnv('ACCESS_SOURCE', 'local');
+        try {
+          const { runner, close } = makeRunner(c, schema, { rewritePublic: true });
+          const t = await tree(c);
+          await createCentralTemplate(admin('g'), { ...BASE, targets: [{ orgUnitUuid: t.b1 }], changeNote: NOTE }, { schema, runner });
+          await expect(deleteOrgUnit(t.b1, 'admin', runner)).rejects.toMatchObject({ name: 'ConflictError', code: 'has_template_targets' });
+          expect(await count(c, 'org_units', 'uuid = $1', [t.b1])).toBe(1);
+          await deleteOrgUnit(t.a11, 'admin', runner);
+          expect(await count(c, 'org_units', 'uuid = $1', [t.a11])).toBe(0);
+          await close();
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      }));
+
+    it('deleting a TARGET unit removes the target row only; the template and its history remain', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const t = await tree(c);
+        const tpl = await createCentralTemplate(
+          admin('g'),
+          { ...BASE, targets: [{ orgUnitUuid: t.a11 }], changeNote: NOTE },
+          { schema, runner },
+        );
+        await c.query('DELETE FROM org_units WHERE uuid = $1', [t.a11]);
+        expect(await count(c, 'central_template_targets', 'template_id = $1', [tpl.id])).toBe(0);
+        expect(await count(c, 'central_templates')).toBe(1);
+        // The snapshot still names the unit that existed then.
+        expect((await c.query('SELECT targets FROM central_template_versions')).rows[0].targets).toEqual([{ orgUnitUuid: t.a11, includeDescendants: true }]);
+        await close();
+      }));
+  });
+
+  describe('audit stays metadata only', () => {
+    it('no name, description, prompt or change note appears in any audit column', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const mgr = bygger('mgr');
+        const secret = { name: 'Hemmeligt navn', prompt: 'Hemmelig promptTekst', note: 'Hemmelig ændringsnote her' };
+        const tpl = await createCentralTemplate(mgr, { ...BASE, name: secret.name, prompt: secret.prompt, changeNote: secret.note }, env);
+        await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: secret.note, prompt: 'Hemmelig promptTekst 2' }, env);
+        await archiveCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: secret.note }, env);
+        await restoreCentralTemplate(mgr, tpl.id, { baseVersion: 3, changeNote: secret.note }, env);
+
+        const dump = JSON.stringify((await c.query(`SELECT * FROM audit_events WHERE event_type LIKE 'central_template.%'`)).rows);
+        expect((await c.query(`SELECT count(*)::int AS n FROM audit_events WHERE event_type LIKE 'central_template.%'`)).rows[0].n).toBe(4);
+        for (const s of ['Hemmeligt', 'Hemmelig prompt', 'promptTekst', 'ændringsnote']) expect(dump).not.toContain(s);
+        await close();
+      }));
+  });
+  describe('role/group targets', () => {
+    async function role(c: Client, kind: 'role' | 'group', identifier: string, name = identifier, active = true) {
+      await c.query(`INSERT INTO external_roles (kind, identifier, name, source, active) VALUES ($1, $2, $3, 'rollekatalog', $4)`, [kind, identifier, name, active]);
+    }
+
+    it('a bygger creates a template with role and group targets only; names are snapshotted', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm', 'Anne Admin');
+        await role(c, 'role', 'sagsbehandler', 'Sagsbehandler');
+        await role(c, 'group', 'social', 'Socialforvaltningen');
+
+        const out = await createCentralTemplate(
+          bygger('adm'),
+          { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }, { kind: 'group', identifier: 'social' }], changeNote: NOTE },
+          env,
+        );
+        expect(out.principalTargets).toEqual([
+          { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', status: 'active', holders: 0 },
+          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: 0 },
+        ]);
+        const v = (await c.query('SELECT principal_targets FROM central_template_versions WHERE version = 1')).rows[0];
+        expect(v.principal_targets).toEqual([
+          { kind: 'group', identifier: 'social', name: 'Socialforvaltningen' },
+          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler' },
+        ]);
+        // The audit event has no secondary entity and only counts.
+        const a = (await c.query(`SELECT secondary_entity_id, details FROM audit_events WHERE event_type = 'central_template.create'`)).rows[0];
+        expect(a.secondary_entity_id).toBeNull();
+        expect(a.details).toEqual({ version: 1, targetCount: 0, principalTargetCount: 2 });
+        expect(JSON.stringify(a)).not.toMatch(/sagsbehandler|social/i);
+        await close();
+      }));
+
+    it('a bygger adds role/group targets to their own template in claims mode', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'mgr');
+        await role(c, 'role', 'sagsbehandler');
+        const mgr = bygger('mgr');
+        const tpl = await createCentralTemplate(mgr, { ...BASE, changeNote: NOTE }, env);
+        const out = await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }] }, env);
+        expect(out.principalTargets.map((x) => x.identifier)).toEqual(['sagsbehandler']);
+        expect(await count(c, 'central_template_principal_targets')).toBe(1);
+        await close();
+      }));
+
+    it('only an ACTIVE catalogue entry can be added; a kept one that was withdrawn since stays and is flagged inactive', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'role', 'gone', 'Udgået', false);
+        const adm = admin('adm');
+        await expect(createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'gone' }], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'principal_target_unknown' });
+        await expect(createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'finnes-ikke' }], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'principal_target_unknown' });
+        expect(await count(c, 'central_templates')).toBe(0);
+
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await c.query(`UPDATE external_roles SET active = false WHERE identifier = 'a'`);
+        expect((await getManageableTemplate(adm, tpl.id, env)).principalTargets).toEqual([{ kind: 'role', identifier: 'a', name: 'Rolle A', status: 'inactive', holders: 0 }]);
+        expect((await listManageableTemplates(adm, {}, env))[0].principalTargets[0].status).toBe('inactive');
+        // Editing something else keeps the withdrawn target (it is not re-validated).
+        const next = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn', principalTargets: [{ kind: 'role', identifier: 'a' }] }, env);
+        expect(next.principalTargets).toHaveLength(1);
+        await close();
+      }));
+
+    it('retargeting writes a retarget version whose snapshot carries the new audience, and the audit counts only', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'group', 'b', 'Gruppe B');
+        const adm = admin('adm');
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        const out = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'group', identifier: 'b' }] }, env);
+        expect(out.principalTargets.map((p) => p.identifier)).toEqual(['b']);
+        const v = (await c.query(`SELECT change_type, principal_targets FROM central_template_versions ORDER BY version`)).rows;
+        expect(v.map((r) => r.change_type)).toEqual(['create', 'retarget']);
+        expect(v[1].principal_targets).toEqual([{ kind: 'group', identifier: 'b', name: 'Gruppe B' }]);
+        // The old version keeps what it was.
+        expect(v[0].principal_targets).toEqual([{ kind: 'role', identifier: 'a', name: 'Rolle A' }]);
+        const e = (await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.retarget'`)).rows[0];
+        expect(e.details).toEqual({ version: 2, targetCount: 0, principalTargetCount: 1 });
+        expect(JSON.stringify(e)).not.toMatch(/Gruppe B|Rolle A/);
+        // Archive and restore keep the audience in the snapshot.
+        await archiveCentralTemplate(adm, tpl.id, { baseVersion: 2, changeNote: NOTE }, env);
+        expect((await c.query(`SELECT principal_targets FROM central_template_versions WHERE version = 3`)).rows[0].principal_targets).toHaveLength(1);
+        await close();
+      }));
+
+    it('the catalogue cannot lose a targeted entry (RESTRICT) nor hold a target that is not in it; an untargeted entry can be deleted', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'role', 'free', 'Fri');
+        const tpl = await createCentralTemplate(admin('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await expectSqlState(c.query(`DELETE FROM external_roles WHERE identifier = 'a'`), '23503');
+        await c.query(`DELETE FROM external_roles WHERE identifier = 'free'`);
+        // The composite FK also stops a target that is not in the catalogue at all.
+        await expectSqlState(
+          c.query(`INSERT INTO central_template_principal_targets (template_id, kind, identifier) VALUES ('${tpl.id}', 'role', 'ukendt')`),
+          '23503',
+        );
+        await expectSqlState(
+          c.query(`INSERT INTO central_template_principal_targets (template_id, kind, identifier) VALUES ('${tpl.id}', 'user', 'a')`),
+          ['23503', '23514'],
+        );
+        // A template is never deleted (the append-only changelog refuses the cascade), so its targets stay too.
+        await expectSqlState(c.query(`DELETE FROM central_templates WHERE id = '${tpl.id}'`), '55000');
+        expect(await count(c, 'central_template_principal_targets')).toBe(1);
+        await close();
+      }));
+
+    it('the version trigger still refuses UPDATE and DELETE of a row with principal targets', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        await role(c, 'role', 'a');
+        await createCentralTemplate(admin('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await expectSqlState(c.query(`UPDATE central_template_versions SET principal_targets = '[]'::jsonb`), '55000');
+        await expectSqlState(c.query('DELETE FROM central_template_versions'), '55000');
+        await close();
+      }));
+    it('principal targets can only be ADDED in claims mode (409 principal_targets_need_claims); an existing audience can still be cleared', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const claims: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        const adm = admin('adm');
+        for (const accessSource of ['local', 'rollekatalog'] as const) {
+          await expect(
+            createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, { ...claims, accessSource }),
+          ).rejects.toMatchObject({ name: 'ConflictError', code: 'principal_targets_need_claims' });
+        }
+        expect(await count(c, 'central_templates')).toBe(0);
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, claims);
+        const local = { ...claims, accessSource: 'local' as const };
+        await expect(
+          updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'role', identifier: 'a' }, { kind: 'role', identifier: 'x' }] }, local),
+        ).rejects.toMatchObject({ code: 'principal_targets_need_claims' });
+        const cleared = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [] }, local);
+        expect(cleared.principalTargets).toEqual([]);
+        await close();
+      }));
+
+    it("a template that reaches roles is still only its creator's (and an administrator's): another bygger gets 404", () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'mgr');
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        const mgr = bygger('mgr');
+        const tpl = await createCentralTemplate(mgr, { ...BASE, principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await expect(updateCentralTemplate(bygger('other'), tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Kapret' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(archiveCentralTemplate(bygger('other'), tpl.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+        expect((await c.query('SELECT name, status, current_version FROM central_templates')).rows[0]).toEqual({ name: BASE.name, status: 'active', current_version: 1 });
+        await archiveCentralTemplate(admin('adm'), tpl.id, { baseVersion: 1, changeNote: NOTE }, env);
+        await expect(restoreCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE }, env)).resolves.toMatchObject({ status: 'active', currentVersion: 3 });
+        await close();
+      }));
+
+    it('holders: counts fresh claim rows of linked, enabled users per catalogue entry, never who; none outside claims mode', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        for (const u of ['u1', 'u2', 'u3', 'u4']) await user(c, u);
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'role', 'b', 'Rolle B');
+        const dir = async (appUser: string, disabled = false) =>
+          c.query(`INSERT INTO directory_users (ext_user_id, name, source, app_user_id, disabled) VALUES ($1, $1, 'claims', $1, $2)`, [appUser, disabled]);
+        for (const [u, disabled] of [['u1', false], ['u2', false], ['u3', true]] as const) await dir(u, disabled);
+        const has = (u: string, id: string, ageSeconds = 0) =>
+          c.query(`INSERT INTO user_external_roles (user_id, kind, identifier, seen_at) VALUES ($1, 'role', $2, now() - make_interval(secs => $3::int))`, [u, id, ageSeconds]);
+        await has('u1', 'a');
+        await has('u2', 'a', 7200); // stale: older than the claims freshness
+        await has('u3', 'a'); // disabled directory user
+        await has('u4', 'a'); // no directory user at all
+        expect((await c.query('SELECT count(*)::int AS n FROM directory_users')).rows[0].n).toBe(3);
+
+        const adm = admin('adm');
+        const cat = (await listCatalogue(env)).entries;
+        expect(cat.find((e) => e.identifier === 'a')!.holders).toBe(1);
+        expect(cat.find((e) => e.identifier === 'b')!.holders).toBe(0);
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }, { kind: 'role', identifier: 'b' }], changeNote: NOTE }, env);
+        expect(tpl.principalTargets.map((p) => [p.identifier, p.holders])).toEqual([['a', 1], ['b', 0]]);
+        expect((await listManageableTemplates(adm, {}, env))[0].principalTargets.map((p) => p.holders)).toEqual([1, 0]);
+        // Outside claims mode nobody holds anything from a claim.
+        const local = { ...env, accessSource: 'local' as const, claimsMaxSeconds: undefined };
+        expect((await listCatalogue(local)).entries.every((e) => e.holders === 0)).toBe(true);
+        await close();
+      }));
+  });
+});

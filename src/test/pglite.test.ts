@@ -15,14 +15,14 @@ describe('the PGlite test database', () => {
     const tables = await pgliteSql<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'u_user_1' ORDER BY 1`,
     );
-    expect(tables.map((t) => t.table_name)).toEqual(expect.arrayContaining(['meetings', 'teams_meetings']));
+    expect(tables.map((t) => t.table_name)).toEqual(expect.arrayContaining(['skabeloner', 'teams_meetings']));
   });
 
   it("keeps each user's queries in that user's own schema", async () => {
-    await queryUserSchema('user-1', `INSERT INTO templates (name) VALUES ('kun bruger 1')`);
+    await queryUserSchema('user-1', `INSERT INTO skabeloner (name) VALUES ('kun bruger 1')`);
     const [mine, theirs] = await Promise.all([
-      queryUserSchema<{ name: string }>('user-1', `SELECT name FROM templates WHERE name = 'kun bruger 1'`),
-      queryUserSchema<{ name: string }>('user-2', `SELECT name FROM templates WHERE name = 'kun bruger 1'`),
+      queryUserSchema<{ name: string }>('user-1', `SELECT name FROM skabeloner WHERE name = 'kun bruger 1'`),
+      queryUserSchema<{ name: string }>('user-2', `SELECT name FROM skabeloner WHERE name = 'kun bruger 1'`),
     ]);
     expect(mine).toHaveLength(1);
     expect(theirs).toHaveLength(0);
@@ -38,10 +38,10 @@ describe('the PGlite test database', () => {
   });
 
   it('starts from a clean, freshly seeded slate after a reset', async () => {
-    await queryUserSchema('user-1', `INSERT INTO templates (name) VALUES ('x')`);
+    await queryUserSchema('user-1', `INSERT INTO skabeloner (name) VALUES ('x')`);
     await resetPgliteDb();
-    expect(await queryUserSchema('user-1', `SELECT 1 FROM templates WHERE name = 'x'`)).toHaveLength(0);
-    // ensureUserSchema ran again and put the default templates back.
-    expect((await queryUserSchema('user-1', `SELECT 1 FROM templates`)).length).toBeGreaterThan(0);
+    expect(await queryUserSchema('user-1', `SELECT 1 FROM skabeloner WHERE name = 'x'`)).toHaveLength(0);
+    // ensureUserSchema ran again and put the default skabeloner back.
+    expect((await queryUserSchema('user-1', `SELECT 1 FROM skabeloner`)).length).toBeGreaterThan(0);
   });
 });

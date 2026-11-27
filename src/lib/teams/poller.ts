@@ -1,11 +1,15 @@
 import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { acknowledgePendingTranscript } from '@/lib/pending-artifacts';
 import { deleteRecordingEnabled } from './artifact-mode';
+import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
+import { teamsFailureCode } from './failure-code';
 import { classifyGraphError, GraphError } from './graph-client';
 import { parseGraphDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
-import { processTeamsMeeting } from './pipeline';
+import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
 import { deleteRecordingFromDrive, type RecordingCleanupResult } from './recording-cleanup';
 import {
   OUTLOOK_UNOPENED_GIVE_UP_MS,
@@ -83,6 +87,22 @@ export interface PollOptions {
    * ever made and the same failure is shown forever.
    */
   force?: boolean;
+  /**
+   * Who started this poll, for the audit log: the background tick (default) or a person
+   * pressing "Tjek nu" / "Prøv igen" (`manual`).
+   */
+  trigger?: 'poller' | 'manual';
+}
+
+/**
+ * What one poll came to, for the audit event: a verdict only (ready, or failed for good), never a
+ * poll that found nothing yet or was throttled. Set by {@link pollMeetingInner}, reported by {@link pollMeeting}.
+ */
+interface FetchVerdict {
+  result: 'ready' | 'failed';
+  transcript: boolean;
+  recording: boolean;
+  code?: string;
 }
 
 /**
@@ -96,6 +116,25 @@ export async function pollMeeting(
   now: Date,
   options: PollOptions = {},
 ): Promise<TeamsMeetingRow> {
+  const verdict: { value?: FetchVerdict } = {};
+  const row = await pollMeetingInner(userId, id, now, options, verdict);
+  // After the row is written, and never able to fail the poll: the helper swallows its own errors.
+  if (verdict.value) {
+    await recordTeamsArtifactsFetch({ userId, meetingId: id, trigger: options.trigger ?? 'poller', ...verdict.value });
+  }
+  return row;
+}
+
+async function pollMeetingInner(
+  userId: string,
+  id: string,
+  now: Date,
+  options: PollOptions,
+  verdict: { value?: FetchVerdict },
+): Promise<TeamsMeetingRow> {
+  const failed = (code: string): void => {
+    verdict.value = { result: 'failed', transcript: false, recording: false, code };
+  };
   let row = await getTeamsMeeting(userId, id);
   if (!row) throw new Error(`Teams meeting not found: ${id}`);
 
@@ -131,7 +170,10 @@ export async function pollMeeting(
   // since would turn from `ready` into `failed` here and lose its referat.
   if (!isTerminal(row.state) || (options.force && row.state === 'failed')) {
     const refreshed = await refreshSchedule(userId, row);
-    if (refreshed.gone) return refreshed.row;
+    if (refreshed.gone) {
+      failed('meeting_gone');
+      return refreshed.row;
+    }
     row = refreshed.row;
   }
 
@@ -168,6 +210,8 @@ export async function pollMeeting(
   }
 
   if (gaveUp) {
+    // Nothing was found within the window; a row that was only waiting for a new sign-in says so.
+    failed(row.state === 'needs_reauth' ? 'reauth_required' : 'gave_up');
     return await markPollAttempt(userId, id, {
       state: 'failed',
       failureReason: row.state === 'needs_reauth' ? REAUTH_GIVE_UP_MESSAGE : GIVE_UP_MESSAGE,
@@ -196,8 +240,9 @@ export async function pollMeeting(
       },
     );
 
+  let outcome: PipelineOutcome | undefined;
   try {
-    const outcome = await processTeamsMeeting(
+    outcome = await processTeamsMeeting(
       userId,
       {
         id: row.id,
@@ -216,6 +261,14 @@ export async function pollMeeting(
     );
 
     if (outcome.status === 'ready') {
+      // An idempotent hit on a stash that was already ready (no ids) fetched nothing this time.
+      if (outcome.transcriptId != null || outcome.recordingId != null) {
+        verdict.value = {
+          result: 'ready',
+          transcript: outcome.mode !== 'recording-only',
+          recording: outcome.recordingBytes != null,
+        };
+      }
       // Stashed, not yet saved by the user: the stash expires after an hour, and
       // an uncollected meeting is then re-collected from the recording. So the
       // recording is not deleted here. The row only remembers which file it was;
@@ -233,6 +286,7 @@ export async function pollMeeting(
       });
     }
     if (outcome.status === 'failed') {
+      failed(outcome.code ?? 'unknown');
       return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
     }
     // A run is already downloading and transcribing this meeting (the poller and
@@ -247,6 +301,21 @@ export async function pollMeeting(
     // Nothing yet — back to waiting, and try again after the backoff.
     return await waiting('awaiting_teams', null, outcome.transient, outcome.recordingStalled);
   } catch (err) {
+    // The person deleted the meeting while this run was working on it: their DELETE
+    // could not remove the stash (a run in progress is spared), and the run has just
+    // written its result to a row that is gone. Nobody will collect it, so remove it now.
+    // The recording stays in OneDrive: it is only deleted once the person has the
+    // transcript (queueRecordingCleanup), and this person never got it.
+    if (await rowVanished(userId, id)) {
+      try {
+        await acknowledgePendingTranscript(id, userId);
+      } catch (ackErr) {
+        safeLogError(`teams/poller ${id}: could not remove the server-held transcript of a deleted meeting`, ackErr);
+      }
+      // Nothing was fetched for the person: they deleted the meeting.
+      verdict.value = undefined;
+      return row;
+    }
     const message = err instanceof Error ? err.message : String(err);
     switch (classifyGraphError(err)) {
       case 'reauth_required':
@@ -255,17 +324,28 @@ export async function pollMeeting(
         // Graph throttles /transcripts routinely; a 429, a 503 or a timeout is "not yet".
         return await waiting('awaiting_teams', message, true);
       case 'transcripts_disabled':
+        failed('transcripts_disabled');
         return await markPollAttempt(userId, id, {
           state: 'failed',
           failureReason: TRANSCRIPTS_DISABLED_MESSAGE,
         });
       case 'graph_error':
+        failed(teamsFailureCode(err));
         return await markPollAttempt(userId, id, { state: 'failed', failureReason: message });
       case 'unknown':
         // A bug or a transient network error: keep waiting, record why.
-        console.error('[teams/poller] unexpected error polling', id, err);
+        safeLogError(`teams/poller ${id}: unexpected error polling`, err);
         return await waiting('awaiting_teams', message);
     }
+  }
+}
+
+/** True only when the row is confirmed gone; a failing lookup is not an answer. */
+async function rowVanished(userId: string, id: string): Promise<boolean> {
+  try {
+    return (await getTeamsMeeting(userId, id)) == null;
+  } catch {
+    return false;
   }
 }
 
@@ -314,19 +394,24 @@ export async function cleanUpRecording(
     const queuedAt = row.recordingCleanupAt ?? row.lastPolledAt ?? now;
     const age = now.getTime() - queuedAt.getTime();
     if (!final && age < RECORDING_CLEANUP_GIVE_UP_MS) {
-      console.warn(`[teams/poller] ${row.id}: deleting the recording from OneDrive postponed:`, err);
+      safeLogError(`teams/poller ${row.id}: deleting the recording from OneDrive postponed`, err);
       return row;
     }
-    console.error(`[teams/poller] ${row.id}: could not delete the recording from OneDrive:`, err);
+    safeLogError(`teams/poller ${row.id}: could not delete the recording from OneDrive`, err);
     result = 'failed';
   }
 
+  let settled: boolean;
   try {
-    await settleRecordingCleanup(userId, row.id, result);
+    settled = await settleRecordingCleanup(userId, row.id, result);
   } catch (err) {
-    console.error('[teams/poller] could not record the recording cleanup for', row.id, err);
+    safeLogError(`teams/poller ${row.id}: could not record the recording cleanup`, err);
     return row;
   }
+  // A concurrent run settled it first and wrote the event: one verdict, one event.
+  if (!settled) return row;
+  // Only the final verdict: a postponed attempt returned above and is retried on the next tick.
+  await recordTeamsRecordingDelete({ userId, meetingId: row.id, status: result });
   return { ...row, recordingCleanup: result };
 }
 
@@ -409,13 +494,37 @@ function sameInstant(a: Date | null, b: Date | null): boolean {
   return a.getTime() === b.getTime();
 }
 
+/**
+ * True when the person's directory user is disabled (left the organisation).
+ * The stored Microsoft token outlives that, and the poller acts without a
+ * session, so it must check the flag itself. Deliberately not `loginRefusal`:
+ * claims-mode role snapshots lapse by design and that would stop collection for
+ * people who merely have not logged in lately. No directory row (password or
+ * claims-only user) is not disabled.
+ */
+async function directoryUserDisabled(userId: string): Promise<boolean> {
+  const res = await pool.query(
+    'SELECT 1 FROM public.directory_users WHERE app_user_id = $1 AND disabled = true LIMIT 1',
+    [userId],
+  );
+  return (res.rowCount ?? res.rows.length) > 0;
+}
+
 async function pollUser(userId: string, now: Date): Promise<number> {
+  try {
+    if (await directoryUserDisabled(userId)) return 0;
+  } catch (err) {
+    // Fail closed: skip this person for this tick.
+    safeLogError(`teams/poller ${userId}: could not check the directory user`, err);
+    return 0;
+  }
+
   let polled = 0;
   let due: TeamsMeetingRow[];
   try {
     due = await listDueTeamsMeetings(userId, now);
   } catch (err) {
-    console.error('[teams/poller] could not list due meetings for', userId, err);
+    safeLogError(`teams/poller ${userId}: could not list due meetings`, err);
     return 0;
   }
 
@@ -423,7 +532,7 @@ async function pollUser(userId: string, now: Date): Promise<number> {
     try {
       await pollMeeting(userId, row.id, now);
     } catch (err) {
-      console.error('[teams/poller] poll failed for', userId, row.id, err);
+      safeLogError(`teams/poller ${userId} ${row.id}: poll failed`, err);
     }
     polled += 1;
   }
@@ -436,7 +545,7 @@ async function pollUser(userId: string, now: Date): Promise<number> {
         await cleanUpRecording(userId, row, now);
       }
     } catch (err) {
-      console.error('[teams/poller] recording cleanup failed for', userId, err);
+      safeLogError(`teams/poller ${userId}: recording cleanup failed`, err);
     }
   }
   return polled;
@@ -475,9 +584,20 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
   try {
     client = await pool.connect();
   } catch (err) {
-    console.error('[teams/poller] could not acquire a connection:', err);
+    safeLogError('teams/poller: could not acquire a connection', err);
     return { polled: 0 };
   }
+
+  // A checked-out client has no pool listener; a connection dropped during a
+  // long pass would otherwise be an uncaught 'error' that kills the process.
+  // The session lock goes with the connection, so only log, and discard the
+  // client instead of returning it to the pool.
+  let connectionLost = false;
+  const onError = (err: Error) => {
+    connectionLost = true;
+    safeLogError('teams/poller: lock connection error', err);
+  };
+  client.on('error', onError);
 
   try {
     const locked = await client.query<{ locked: boolean }>(
@@ -496,10 +616,13 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
       await client.query('SELECT pg_advisory_unlock($1)', [POLL_LOCK_KEY]);
     }
   } catch (err) {
-    console.error('[teams/poller] run failed:', err);
+    safeLogError('teams/poller: run failed', err);
     return { polled: 0 };
   } finally {
-    client.release();
+    // Remove our listener before release: pg-pool only manages its own, so ours
+    // would otherwise pile up on a reused client.
+    client.removeListener('error', onError);
+    client.release(connectionLost ? true : undefined);
   }
 }
 
@@ -544,7 +667,7 @@ export function startPoller(): () => void {
     try {
       await pollDueMeetings(new Date());
     } catch (err) {
-      console.error('[teams/poller] tick failed:', err);
+      safeLogError('teams/poller: tick failed', err);
     } finally {
       running = false;
     }

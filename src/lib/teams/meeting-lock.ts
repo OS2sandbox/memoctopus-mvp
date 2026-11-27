@@ -1,4 +1,5 @@
 import { createDbClient } from '@/lib/db';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 /**
  * Per-meeting mutual exclusion for the Graph pipeline.
@@ -50,7 +51,7 @@ export async function withMeetingLock<T>(
   try {
     await client.connect();
   } catch (err) {
-    console.error('[teams/meeting-lock] no connection, running unguarded:', err);
+    safeLogError('teams/meeting-lock: no connection, running unguarded', err);
     return await fn();
   }
 
@@ -67,9 +68,9 @@ export async function withMeetingLock<T>(
     } finally {
       await client
         .query('SELECT pg_advisory_unlock($1, $2)', [MEETING_LOCK_NAMESPACE, lockKey])
-        .catch((err) => console.error('[teams/meeting-lock] unlock failed:', err));
+        .catch((err) => safeLogError('teams/meeting-lock: unlock failed', err));
     }
   } finally {
-    await client.end().catch((err) => console.error('[teams/meeting-lock] close failed:', err));
+    await client.end().catch((err) => safeLogError('teams/meeting-lock: close failed', err));
   }
 }

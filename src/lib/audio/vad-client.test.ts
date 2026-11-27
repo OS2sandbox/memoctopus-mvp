@@ -45,7 +45,6 @@ const frameSamples = Math.round(SR * 0.03);   // 480
 const threshold    = 0.01;
 const prePad       = Math.round(SR * 0.25);   // 4000
 const postPad      = Math.round(SR * 0.40);   // 6400
-const minSpeech    = Math.round(SR * 0.10);   // 1600
 const minSilFrames = Math.ceil(SR * 0.80 / frameSamples); // 27
 
 // ─── All-silence input ───────────────────────────────────────────────────────
@@ -310,9 +309,6 @@ describe('energyVAD — start/end are in seconds on original timeline', () => {
     // At half sample rate (8 kHz) the same signal represents twice as long in time.
     const halfSR = 8_000;
     const halfFrameSamples = Math.round(halfSR * 0.03);
-    const halfPrePad       = Math.round(halfSR * 0.25);
-    const halfSilFrames    = Math.ceil(halfSR * 0.80 / halfFrameSamples);
-    const halfSilSamples   = halfSilFrames * halfFrameSamples;
 
     // Speech: frame 10 → sample 10*halfFrameSamples
     const speechStartSample = 10 * halfFrameSamples;

@@ -8,7 +8,7 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { HviskeProvider, getTranscriptionProvider, setTranscriptionProvider, isEnsembleDiarization, hviskeBaseURL } from './transcription';
+import { HviskeProvider, isEnsembleDiarization, hviskeBaseURL } from './transcription';
 
 // ─── HviskeProvider.transcribe ────────────────────────────────────────────────
 
@@ -186,28 +186,6 @@ describe('HviskeProvider.transcribeRaw', () => {
 
     const call = mockTranscriptionsCreate.mock.calls[0][0];
     expect(call.file.name).toMatch(/\.wav$/);
-  });
-});
-
-// ─── Provider singleton ───────────────────────────────────────────────────────
-
-describe('getTranscriptionProvider / setTranscriptionProvider', () => {
-  it('returns a HviskeProvider by default', () => {
-    setTranscriptionProvider(null as never);
-    const p = getTranscriptionProvider();
-    expect(p).toBeInstanceOf(HviskeProvider);
-  });
-
-  it('returns the same instance on repeated calls', () => {
-    setTranscriptionProvider(null as never);
-    expect(getTranscriptionProvider()).toBe(getTranscriptionProvider());
-  });
-
-  it('returns the injected provider after setTranscriptionProvider', () => {
-    const stub = { transcribe: vi.fn() };
-    setTranscriptionProvider(stub);
-    expect(getTranscriptionProvider()).toBe(stub);
-    setTranscriptionProvider(null as never); // reset
   });
 });
 

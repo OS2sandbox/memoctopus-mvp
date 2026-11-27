@@ -17,10 +17,11 @@ vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
 vi.mock('@/lib/pending-artifacts', () => ({
   getMeetingOwner: vi.fn().mockResolvedValue(null),
   setMeetingOwner: vi.fn().mockResolvedValue(undefined),
+  acknowledgePendingTranscript: vi.fn().mockResolvedValue(true),
 }));
 
 import { queryUserSchema } from '@/lib/db/user-schema';
-import { usePgliteDb } from '@/test/pglite';
+import { pgliteSql, usePgliteDb } from '@/test/pglite';
 import { GraphError } from './graph-client';
 import { disarmMeeting } from './meeting-arm';
 import { deleteRecordingFromDrive } from './recording-cleanup';
@@ -116,7 +117,12 @@ describe('unregisterTeamsMeeting — a series shares one Teams meeting', () => {
     const off = await register('a');
     mockDisarm.mockRejectedValueOnce(new GraphError('http', 'nej', { status: 500 }));
 
-    expect(await unregisterTeamsMeeting(USER, off)).toEqual({ disarmed: false, keptForOtherOccurrences: false });
+    // The closed code is for the audit event; the routes never put it in their answer.
+    expect(await unregisterTeamsMeeting(USER, off)).toEqual({
+      disarmed: false,
+      keptForOtherOccurrences: false,
+      failureCode: 'http_500',
+    });
     expect(await getTeamsMeeting(USER, 'a')).toBeNull();
   });
 });
@@ -160,7 +166,9 @@ describe('unregisterTeamsMeeting — a recording still to be deleted from OneDri
     // … but the poller still has the delete to do.
     expect((await listPendingRecordingCleanups(USER)).map((r) => r.id)).toEqual(['m1']);
 
-    // The next poller pass deletes the recording, and with it the last of the row.
+    // The next poller pass deletes the recording, and with it the last of the row. The pass
+    // first skips disabled people (public.directory_users, not in PGlite): an empty table.
+    await pgliteSql('CREATE TABLE IF NOT EXISTS public.directory_users (app_user_id TEXT, disabled BOOLEAN)');
     process.env.TEAMS_GRAPH_ENABLED = 'true';
     mockDeleteRecording.mockResolvedValueOnce('deleted');
     try {

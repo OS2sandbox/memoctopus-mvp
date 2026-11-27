@@ -81,9 +81,12 @@ describe('Microsoft: stored name and email follow Entra', () => {
 
   // Never a blind overwrite: an email another user holds would break users.email's
   // UNIQUE constraint and lock this user out of Microsoft sign-in (entra-user-info.ts).
+  // The vetting sits in the provider's own getUserInfo: better-auth never calls
+  // mapProfileToUser when getUserInfo is supplied (index.test.ts runs it end to end).
   it('vets the claims before they are written', async () => {
     const microsoft = await microsoftOptions({ MICROSOFT_TENANT_ID: '11111111-2222-3333-4444-555555555555' });
-    expect(microsoft.mapProfileToUser).toBeTypeOf('function');
+    expect(microsoft.getUserInfo).toBeTypeOf('function');
+    expect(microsoft).not.toHaveProperty('mapProfileToUser');
   });
 
   it('leaves the rest of the provider config alone', async () => {

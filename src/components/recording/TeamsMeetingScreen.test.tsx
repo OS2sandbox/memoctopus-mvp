@@ -226,6 +226,7 @@ describe('TeamsMeetingScreen — ready', () => {
       expect(mockUpdateMeeting).toHaveBeenCalledWith(
         MEETING_ID,
         expect.objectContaining({ status: 'processing' }),
+        { automatic: true },
       );
       expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`);
     });
@@ -249,10 +250,30 @@ describe('TeamsMeetingScreen — ready', () => {
         status: 'processing',
         participants: ['Mette Hansen', 'Jens Poulsen'],
         audioDurationSeconds: 540,
-      })),
+      }), { automatic: true }),
     );
     expect(mockSaveAudio).not.toHaveBeenCalled();
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
+  });
+
+  // The names come from Teams, not from the person: the hand-off is a machine write, so
+  // it must not be audited as the person editing the participant list.
+  it('writes the Teams speaker names as an automatic write, not a user edit', async () => {
+    metaResponse = jsonMeta({
+      status: 'no-recording',
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 540,
+    });
+    respondWith(statusBody({ state: 'ready' }));
+
+    renderScreen();
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(
+      MEETING_ID,
+      expect.objectContaining({ participants: ['Mette Hansen', 'Jens Poulsen'] }),
+      { automatic: true },
+    );
   });
 
   it('keeps the Teams speaker names in transcript-only mode, with no audio', async () => {
@@ -270,7 +291,7 @@ describe('TeamsMeetingScreen — ready', () => {
     expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({
       status: 'processing',
       participants: ['Mette Hansen'],
-    }));
+    }), { automatic: true });
   });
 
   it('routes only once even if the poll runs again', async () => {

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getDiarizationProvider } from '@/lib/ai/diarization';
+import { withHandler } from '@/lib/api-handler';
 import { DIARIZE_PING_INTERVAL_MS } from '@/lib/audio/diarize-stream';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -50,12 +51,15 @@ function singleEventStream(event: DiarizeEvent): Response {
 // the client merges the turns onto its transcript segments (see merge-speakers.ts)
 // and stores the result in IndexedDB. Diarization must run over the WHOLE recording
 // in one pass because speaker identity is global, so this is a single request, not
-// per-utterance. The time limit is DIARIZATION_TIMEOUT_MS, enforced by the provider
-// against the diarization service.
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: _id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+// per-utterance.
+//
+// The request's only time limit is DIARIZATION_TIMEOUT_MS, enforced by the provider
+// against the diarization service; the browser waits for this route without one of its
+// own, and a reverse proxy in front must allow as long (nginx/nginx.conf, DEPLOY.md).
+// Not audited: it is a pipeline step on audio that audio.upload already covers.
+async function postHandler(req: NextRequest, _ctx: Params) {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -79,7 +83,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         send({ type: 'done', turns });
       } catch (err) {
         // Non-fatal: the client falls back to manual speaker assignment.
-        console.error(`[diarize] failed after ${Date.now() - t0} ms:`, err);
+        safeLogError(`diarize failed after ${Date.now() - t0} ms`, err);
         send({ type: 'error' });
       } finally {
         clearInterval(ping);
@@ -88,3 +92,5 @@ export async function POST(req: NextRequest, { params }: Params) {
     },
   }));
 }
+
+export const POST = withHandler('diarize', postHandler);

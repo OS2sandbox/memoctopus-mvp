@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { setStorageUserId } from '@/lib/storage/scope';
+import { startAuditReporting } from '@/lib/audit/client';
 
 // Binds client-side storage (IndexedDB) to the signed-in user. Rendered at the top
 // of the authenticated layout with the server-validated user id, so every storage
@@ -13,6 +14,8 @@ export function StorageScope({ userId, children }: { userId: string; children: R
   // Re-apply if the user changes within the session (sign out → sign in).
   useEffect(() => {
     setStorageUserId(userId);
+    // Delivers client audit events a previous page load left in the outbox.
+    startAuditReporting(userId);
   }, [userId]);
   return <>{children}</>;
 }

@@ -2,6 +2,7 @@ import { transcribeWithVadBatches, transcribeEnsemble, isEnsembleDiarization } f
 import { getDiarizationProvider } from '@/lib/ai/diarization';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
 import { storePendingTranscript } from '@/lib/pending-artifacts';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Server-side transcription of a Teams recording (see teams/pipeline.ts, where it
 // is the recording-only mode): hviske transcribes while diarization runs in
@@ -31,7 +32,7 @@ export async function transcribeRecording(
     ]);
 
     if (transcription.status === 'rejected') {
-      console.error(`[transcribe-recording] ${meetingId} transcription failed:`, transcription.reason);
+      safeLogError(`transcribe-recording ${meetingId} transcription failed`, transcription.reason);
       await storePendingTranscript(meetingId, { status: 'failed' });
       return;
     }
@@ -39,7 +40,7 @@ export async function transcribeRecording(
     const turns = diarization.status === 'fulfilled' ? diarization.value : [];
     if (diarization.status === 'rejected') {
       // Non-fatal: ship the transcript with default labels.
-      console.error(`[transcribe-recording] ${meetingId} diarization failed:`, diarization.reason);
+      safeLogError(`transcribe-recording ${meetingId} diarization failed`, diarization.reason);
     }
 
     const segments = assignSpeakers(transcription.value, turns);
@@ -53,7 +54,7 @@ export async function transcribeRecording(
       `(diarized=${turns.length > 0}) in ${Date.now() - t0} ms`,
     );
   } catch (err) {
-    console.error(`[transcribe-recording] ${meetingId} failed:`, err);
+    safeLogError(`transcribe-recording ${meetingId} failed`, err);
     await storePendingTranscript(meetingId, { status: 'failed' }).catch(() => {});
   }
 }

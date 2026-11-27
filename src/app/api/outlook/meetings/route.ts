@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateAddinRequest } from '@/lib/outlook/addin-auth';
+import { requireAddinUser } from '@/lib/outlook/addin-gate';
 import { addinErrorResponse } from '@/lib/outlook/http';
+import { recordTeamsRegister } from '@/lib/teams/audit';
+import { teamsFailureCode } from '@/lib/teams/failure-code';
+import { isArmed } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { registerTeamsMeeting } from '@/lib/teams/register';
+import { registerTeamsMeeting, type RegisterProgress } from '@/lib/teams/register';
 import { listTeamsMeetingsByGraphId, type TeamsMeetingRow } from '@/lib/teams/store';
 import { validateTeamsUrl } from '@/lib/teams/url';
 
@@ -38,7 +41,7 @@ function sameInstant(a: Date | null, b: Date | null): boolean {
 export async function POST(req: NextRequest) {
   let userId: string;
   try {
-    userId = await authenticateAddinRequest(req.headers);
+    userId = await requireAddinUser(req.headers);
   } catch (err) {
     return addinErrorResponse(err);
   }
@@ -64,6 +67,10 @@ export async function POST(req: NextRequest) {
     occurrenceEnd = null;
   }
 
+  // Set once a registration is under way, for the audit event of a failure after it.
+  let meetingId: string | null = null;
+  const progress: RegisterProgress = {};
+
   try {
     const resolved = await resolveJoinUrl(userId, joinUrl);
     const rows = (await listTeamsMeetingsByGraphId(userId, resolved.graphMeetingId)).filter(ACTIVE);
@@ -87,7 +94,7 @@ export async function POST(req: NextRequest) {
     const reuse = rows.find(
       (r) => r.origin === 'outlook' && (occurrenceStart == null || sameInstant(r.scheduledStart, occurrenceStart)),
     ) ?? null;
-    const meetingId = reuse?.id ?? `ol-${crypto.randomUUID()}`;
+    meetingId = reuse?.id ?? `ol-${crypto.randomUUID()}`;
 
     const { row, armResult } = await registerTeamsMeeting(userId, {
       meetingId,
@@ -98,6 +105,16 @@ export async function POST(req: NextRequest) {
       origin: 'outlook',
       // A re-arm must not reset a row that is being fetched right now.
       keepState: reuse != null,
+    }, progress);
+
+    // Arming PATCHed the user's Teams meeting options on their behalf, as from the dashboard.
+    await recordTeamsRegister(req, {
+      userId,
+      meetingId,
+      outcome: 'success',
+      armed: row.armed,
+      isOrganizer: row.isOrganizer,
+      armResult,
     });
 
     console.log(`[outlook] ${userId} ${reuse ? 're-armed' : 'armed'} ${row.id} (${armResult})`);
@@ -114,6 +131,17 @@ export async function POST(req: NextRequest) {
       managedInDashboard: false,
     });
   } catch (err) {
+    if (meetingId) {
+      await recordTeamsRegister(req, {
+        userId,
+        meetingId,
+        outcome: 'error',
+        code: teamsFailureCode(err),
+        // The meeting may be armed in Teams although saving the row failed afterwards.
+        ...(progress.armResult !== undefined ? { armed: isArmed(progress.armResult), armResult: progress.armResult } : {}),
+        ...(progress.isOrganizer !== undefined ? { isOrganizer: progress.isOrganizer } : {}),
+      });
+    }
     return addinErrorResponse(err);
   }
 }

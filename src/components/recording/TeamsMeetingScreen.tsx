@@ -141,11 +141,13 @@ async function collectTeamsArtifacts(meetingId: string, signal: AbortSignal): Pr
       durationSeconds?: number | null;
     };
     if (signal.aborted) return false;
+    // The speaker names come from Teams, not from the person: an automatic write, so it is not
+    // audited as a participants edit.
     await updateMeeting(meetingId, {
       status: 'processing',
       audioDurationSeconds: body.durationSeconds ?? null,
       ...(body.participants?.length ? { participants: body.participants } : {}),
-    });
+    }, { automatic: true });
     return true;
   }
   if (signal.aborted) return false;

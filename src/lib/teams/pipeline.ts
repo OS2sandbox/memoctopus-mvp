@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { runFfmpeg } from '@/lib/audio/decode-server';
 import { GraphError, classifyGraphError } from './graph-client';
+import { teamsFailureCode } from './failure-code';
 import { graphDate, realDate } from './graph-dates';
 import {
   listArtifacts,
@@ -27,6 +28,7 @@ import { withMeetingLock } from './meeting-lock';
 import { assertSafeMeetingId } from './meeting-id';
 import { teamsScratchRoot } from './scratch';
 import { artifactMode } from './artifact-mode';
+import { safeLogError } from '@/lib/audit/safe-log';
 import {
   SAME_START_TOLERANCE_MS,
   artifactSpan,
@@ -85,7 +87,8 @@ export type PipelineOutcome =
   // Transient too, but counted apart (see PipelineMeeting.recordingUnreachable):
   // Teams has published it, so waiting for Teams will not help.
   | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working'; recordingStalled?: true }
-  | { status: 'failed'; reason: string };
+  // `code`: the closed audit code of the failure (failure-code.ts), never the message.
+  | { status: 'failed'; reason: string; code?: string };
 
 export interface PipelineMeeting {
   id: string;
@@ -235,7 +238,7 @@ async function runPipeline(
       case 'retryable':
         return { status: 'pending', transient: true };
       case 'graph_error':
-        return { status: 'failed', reason: (err as GraphError).message };
+        return { status: 'failed', reason: (err as GraphError).message, code: teamsFailureCode(err) };
       case 'unknown':
         throw err;
     }
@@ -295,8 +298,8 @@ async function runPipeline(
     if (err instanceof RecordingStalled) return { status: 'pending', transient: true, recordingStalled: true };
     if (cls === 'retryable') return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
-    console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
-    return { status: 'failed', reason };
+    safeLogError(`teams-pipeline ${meeting.id} failed`, err);
+    return { status: 'failed', reason, code: teamsFailureCode(err) };
   }
 }
 
@@ -386,7 +389,7 @@ async function runRecordingWithTranscript(
   } catch (err) {
     // Not fatal while Teams' own transcript is in hand: losing hviske's Danish
     // costs quality, shipping nothing costs the meeting.
-    console.error(`[teams-pipeline] ${meeting.id} cue transcription failed:`, err);
+    safeLogError(`teams-pipeline ${meeting.id} cue transcription failed`, err);
   }
 
   let segments = heard;
@@ -562,7 +565,7 @@ async function runStretches(
       try {
         heard = (await transcribeAlongCues(wav, cues)).segments;
       } catch (err) {
-        console.error(`[teams-pipeline] ${meeting.id} cue transcription of ${ref.id} failed:`, err);
+        safeLogError(`teams-pipeline ${meeting.id} cue transcription of ${ref.id} failed`, err);
       }
       if (coversMeeting(heard, fromTeams)) {
         pieces.push({ start, segments: heard });

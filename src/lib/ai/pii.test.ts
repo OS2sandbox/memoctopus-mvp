@@ -59,17 +59,16 @@ describe('removePii', () => {
     expect(result.replacements).toHaveLength(0);
   });
 
-  it('logs the raw response and bound error on parse failure', async () => {
+  it('logs only the error class on parse failure, never the model reply or the error text', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockComplete.mockResolvedValueOnce(openaiResponse('totally invalid json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('Her er svaret: Anna Hansen, CPR 010190-1234 {'));
 
-    await removePii('something');
+    await removePii('Jeg hedder Anna Hansen');
 
     expect(errorSpy).toHaveBeenCalledOnce();
-    const [label, raw, err] = errorSpy.mock.calls[0];
-    expect(label).toBe('[pii] parse failed. raw:');
-    expect(raw).toBe('totally invalid json');
-    expect(err).toBeInstanceOf(SyntaxError);
+    expect(errorSpy.mock.calls[0]).toHaveLength(1);
+    expect(errorSpy.mock.calls[0][0]).toBe('[pii parse failed] name=SyntaxError');
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(/Anna|010190/);
 
     errorSpy.mockRestore();
   });

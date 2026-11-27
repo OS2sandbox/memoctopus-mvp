@@ -47,6 +47,8 @@ const PARSERS = {
 
 const DEFAULT_SEARCH_PATH = '"$user", public';
 const SET_SEARCH_PATH = /^\s*SET\s+search_path\s+TO\s+([\s\S]+?)\s*;?\s*$/i;
+// queryUserSchema resets the pooled connection after use; the simulated client tracks that too.
+const RESET_SEARCH_PATH = /^\s*RESET\s+search_path\s*;?\s*$/i;
 
 // ─── The one session, shared fairly between simulated clients ─────────────────
 
@@ -85,6 +87,10 @@ class SimulatedClient {
       this.searchPath = setPath[1];
       return { rows: [], rowCount: 0 };
     }
+    if (RESET_SEARCH_PATH.test(text)) {
+      this.searchPath = DEFAULT_SEARCH_PATH;
+      return { rows: [], rowCount: 0 };
+    }
 
     await acquire(this);
     try {
@@ -112,13 +118,15 @@ class SimulatedClient {
     }
   }
 
-  release(): void {
+  release(_discard?: boolean): void {
     this.inTransaction = false;
     release(this);
   }
 
-  // pg.Client surface, for createDbClient() callers.
+  // pg.Client surface, for createDbClient() callers (and the error listener a held connection gets).
   async connect(): Promise<void> {}
+  on(): void {}
+  removeListener(): void {}
   async end(): Promise<void> {
     this.release();
   }

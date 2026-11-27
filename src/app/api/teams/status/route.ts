@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { safeLogError } from '@/lib/audit/safe-log';
 import { GraphError, hasGraphScopes } from '@/lib/teams/graph-client';
 import { artifactMode, deleteRecordingEnabled } from '@/lib/teams/artifact-mode';
 
@@ -20,8 +20,9 @@ import { artifactMode, deleteRecordingEnabled } from '@/lib/teams/artifact-mode'
  * user the truth for this deployment instead of assuming the defaults.
  */
 export async function GET() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   if (!teamsGraphEnabled()) {
     return NextResponse.json({ enabled: false, microsoftLinked: false, scopesOk: false, missing: [] });
@@ -40,7 +41,7 @@ export async function GET() {
     if (err instanceof GraphError && err.code === 'reauth_required') {
       return NextResponse.json({ enabled: true, microsoftLinked: false, scopesOk: false, missing: [], ...handling });
     }
-    console.error('[teams/status] scope check failed:', err);
+    safeLogError('teams/status: scope check failed', err);
     return NextResponse.json({ enabled: true, microsoftLinked: false, scopesOk: false, missing: [], ...handling });
   }
 }

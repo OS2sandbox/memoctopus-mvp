@@ -18,6 +18,7 @@ const SRC = path.join(ROOT, 'src');
 const NOT_OPERATOR_SETTINGS: Record<string, string> = {
   NODE_ENV: 'set by Next.js and the Dockerfile',
   NEXT_RUNTIME: 'set by Next.js for each runtime (instrumentation.ts)',
+  NEXT_PHASE: 'set by Next.js while it builds (external-roles.ts skips its database read then)',
   VITEST: 'set by the test runner; switches background jobs off under test',
 };
 

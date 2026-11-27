@@ -95,9 +95,8 @@ describe('ArchiveMeetingRow — basic rendering', () => {
   });
 
   it('does not render duration separator when durationSeconds is null', () => {
-    const { container } = renderRow(makeRow({ durationSeconds: null }));
+    renderRow(makeRow({ durationSeconds: null }));
     // The · separator only appears between date and duration
-    const meta = container.querySelector('p.mt-0\\.5, p[style*="mono"]');
     // durationSeconds is null so no duration text at all — just check absence of time pattern
     expect(screen.queryByText(/\d{2}:\d{2}/)).toBeNull();
   });

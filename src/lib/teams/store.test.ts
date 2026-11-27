@@ -542,15 +542,22 @@ describe('recording cleanup', () => {
   });
 
   it('settles only a row that is still pending, so the first verdict stands', async () => {
-    mockQuery.mockResolvedValue([] as never);
+    mockQuery.mockResolvedValue([{ id: 'm1' }] as never);
 
-    await settleRecordingCleanup(USER, 'm1', 'deleted');
+    await expect(settleRecordingCleanup(USER, 'm1', 'deleted')).resolves.toBe(true);
 
     const [userId, sql, params] = mockQuery.mock.calls[0];
     expect(userId).toBe(USER);
     expect(sql).toMatch(/SET recording_cleanup = \$2/);
     expect(sql).toMatch(/AND recording_cleanup = 'pending'/);
+    expect(sql).toMatch(/RETURNING id/);
     expect(params).toEqual(['m1', 'deleted']);
+  });
+
+  it('reports false when another run already settled the row', async () => {
+    mockQuery.mockResolvedValue([] as never);
+
+    await expect(settleRecordingCleanup(USER, 'm1', 'not_found')).resolves.toBe(false);
   });
 });
 

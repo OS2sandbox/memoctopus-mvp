@@ -1,5 +1,7 @@
-import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { acknowledgePendingTranscript, getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { deleteRecordingEnabled } from './artifact-mode';
+import { teamsFailureCode } from './failure-code';
 import { parseGraphDate } from './graph-dates';
 import { armMeeting, disarmMeeting, isArmed } from './meeting-arm';
 import { resolveJoinUrl, type ResolvedMeeting } from './meeting-resolver';
@@ -53,7 +55,21 @@ export interface RegisterResult {
   armResult: TeamsArmResult;
 }
 
-export async function registerTeamsMeeting(userId: string, input: RegisterInput): Promise<RegisterResult> {
+/**
+ * What is known of the arm step so far, filled in as it happens, so the caller's
+ * audit event for a failure that comes after it can say the meeting may be armed
+ * in Teams although saving the row failed.
+ */
+export interface RegisterProgress {
+  isOrganizer?: boolean;
+  armResult?: TeamsArmResult;
+}
+
+export async function registerTeamsMeeting(
+  userId: string,
+  input: RegisterInput,
+  progress: RegisterProgress = {},
+): Promise<RegisterResult> {
   const { meetingId } = input;
 
   // The pending stash is keyed by meetingId across all users, and the pipeline
@@ -67,12 +83,14 @@ export async function registerTeamsMeeting(userId: string, input: RegisterInput)
   await setMeetingOwner(meetingId, userId);
 
   const resolved = input.resolved ?? (await resolveJoinUrl(userId, input.joinUrl));
+  progress.isOrganizer = resolved.isOrganizer;
 
   // Only the organizer may PATCH meeting options; an invitee is registered
   // anyway, because their transcript is readable if somebody starts
   // transcription manually.
   const outcome = resolved.isOrganizer ? await armMeeting(userId, resolved.graphMeetingId) : null;
   const armResult = outcome?.result ?? ('not_organizer' as const);
+  progress.armResult = armResult;
 
   // What the organizer had before we ever PATCHed this Graph meeting, for the
   // disarm to restore — claimed once per graphMeetingId, not per local id, so
@@ -123,6 +141,8 @@ export interface UnregisterResult {
    * written before it existed still type-check.
    */
   keptForOtherOccurrences?: boolean;
+  /** The closed failure code (failure-code.ts) when `disarmed` is false because Graph failed; for the audit event, never the response. */
+  failureCode?: string;
 }
 
 /**
@@ -132,7 +152,8 @@ export interface UnregisterResult {
  * to stop collecting. One exception: a recording still queued for deletion from
  * OneDrive is deleted first, and if that cannot happen now the row is kept, out
  * of sight, until the poller has done it. The row is the only record of which
- * file to delete.
+ * file to delete. The transcript the browser has not collected goes in every case:
+ * it must not outlive the meeting (audited as teams.stash_delete when it held one).
  */
 export async function unregisterTeamsMeeting(
   userId: string,
@@ -140,6 +161,7 @@ export async function unregisterTeamsMeeting(
   now: Date = new Date(),
 ): Promise<UnregisterResult> {
   let disarmed = true;
+  let failureCode: string | undefined;
   let keptForOtherOccurrences = false;
   // A policy-blocked arm was still PATCHed, so it has options to put back too.
   if (row.armed || row.armResult === 'policy_blocked') {
@@ -154,7 +176,8 @@ export async function unregisterTeamsMeeting(
         await disarmMeeting(userId, row.graphMeetingId, originalOptions);
       } catch (err) {
         disarmed = false;
-        console.error('[teams] disarm failed for', row.id, '- the meeting may still be armed in Teams:', err);
+        failureCode = teamsFailureCode(err);
+        safeLogError(`teams ${row.id}: disarm failed, the meeting may still be armed in Teams`, err);
       }
     }
   }
@@ -163,11 +186,21 @@ export async function unregisterTeamsMeeting(
     const after = await cleanUpRecording(userId, row, now);
     if (after.recordingCleanup === 'pending') {
       await markTeamsMeetingUnregistered(userId, row.id);
-      return { disarmed, keptForOtherOccurrences };
+      await dropStash(userId, row.id);
+      return { disarmed, keptForOtherOccurrences, ...(failureCode ? { failureCode } : {}) };
     }
   }
   await deleteTeamsMeeting(userId, row.id);
-  return { disarmed, keptForOtherOccurrences };
+  await dropStash(userId, row.id);
+  return { disarmed, keptForOtherOccurrences, ...(failureCode ? { failureCode } : {}) };
+}
+
+async function dropStash(userId: string, meetingId: string): Promise<void> {
+  try {
+    await acknowledgePendingTranscript(meetingId, userId);
+  } catch (err) {
+    safeLogError(`teams ${meetingId}: could not remove the server-held transcript`, err);
+  }
 }
 
 /** Collected or given up on: Teams has nothing more to record for it. */

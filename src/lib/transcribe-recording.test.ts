@@ -111,6 +111,28 @@ describe('transcribeRecording', () => {
     expect(mockStoreTranscript).toHaveBeenCalledWith('m1', { status: 'failed' });
   });
 
+  it('logs only the error class when STT or diarization fail, never the message or body', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribe.mockRejectedValueOnce(Object.assign(new Error('body: Budget 2024 hemmeligt'), { status: 502 }));
+    mockDiarize.mockRejectedValueOnce(new Error('body: Anna Hansen sagde noget'));
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
+
+    mockTranscribe.mockResolvedValueOnce(SEGMENTS);
+    mockDiarize.mockRejectedValueOnce(new Error('body: Anna Hansen sagde noget'));
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
+
+    mockIsEnsemble.mockReturnValue(true);
+    mockEnsemble.mockRejectedValueOnce(new Error('body: Budget 2024 hemmeligt'));
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    for (const call of spy.mock.calls) expect(call).toHaveLength(1);
+    const logged = JSON.stringify(spy.mock.calls);
+    expect(logged).not.toMatch(/Budget|Anna|hemmeligt/);
+    expect(logged).toContain('status=502');
+    spy.mockRestore();
+  });
+
   it('never throws — a failure is recorded in the stash', async () => {
     mockTranscribe.mockRejectedValueOnce(new Error('boom'));
     mockDiarize.mockRejectedValueOnce(new Error('boom'));

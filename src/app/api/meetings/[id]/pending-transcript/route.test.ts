@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -146,7 +153,7 @@ describe('DELETE /api/meetings/[id]/pending-transcript (acknowledge)', () => {
     const res = await DELETE(DEL, PARAMS);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(mockAck).toHaveBeenCalledWith('m1');
+    expect(mockAck).toHaveBeenCalledWith('m1', 'user-123');
   });
 
   it('is idempotent: acknowledging again is still ok', async () => {

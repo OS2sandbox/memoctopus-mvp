@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { recordTeamsUnregister } from '@/lib/teams/audit';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { pollMeeting } from '@/lib/teams/poller';
 import { unregisterTeamsMeeting } from '@/lib/teams/register';
@@ -65,8 +66,9 @@ const FORCED_POLL_BUDGET_MS = 8_000;
  * is not theirs simply does not exist → 404.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const userId = session.user.id;
@@ -89,9 +91,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Node process the background poller runs in, so an unawaited promise is not
     // cut short. Its outcome lands on the row, which the screen is polling.
     let failure: unknown = null;
-    const run = pollMeeting(userId, id, new Date(), { force: true }).catch((err: unknown) => {
+    const run = pollMeeting(userId, id, new Date(), { force: true, trigger: 'manual' }).catch((err: unknown) => {
       failure = err;
-      console.error('[teams/meetings] forced poll failed for', id, err);
+      safeLogError(`teams/meetings ${id}: forced poll failed`, err);
       return null;
     });
 
@@ -125,9 +127,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
  * to reach it from here); `keptForOtherOccurrences` that it was left armed on
  * purpose, for other occurrences of the same series that are still registered.
  */
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const userId = session.user.id;
@@ -135,8 +138,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-  const result = await unregisterTeamsMeeting(userId, row);
-  return NextResponse.json({ ok: true, ...result });
+  const { disarmed, keptForOtherOccurrences, failureCode } = await unregisterTeamsMeeting(userId, row);
+  // Disarming PATCHes the user's Teams meeting options back; `disarmed: false` says it could not be done.
+  await recordTeamsUnregister(req, { userId, meetingId: id, disarmed, ...(failureCode ? { code: failureCode } : {}) });
+  return NextResponse.json({ ok: true, disarmed, keptForOtherOccurrences });
 }
 
 /**
@@ -152,8 +157,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
  * applies. Refused (409) for a row that is not `ready`, or outside that window.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const userId = session.user.id;

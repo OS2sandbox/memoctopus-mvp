@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 
 // ---------------------------------------------------------------------------
@@ -12,10 +12,6 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 //      fallback path, AND
 //   2. Returns the resolved component synchronously (for the "resolves" path).
 // ---------------------------------------------------------------------------
-
-// We track the dynamic factory so individual tests can control resolution.
-let resolveDynamicImport: ((mod: { default: React.ComponentType }) => void) | null = null;
-let dynamicPromise: Promise<{ default: React.ComponentType }> | null = null;
 
 vi.mock('next/dynamic', () => ({
   default: (factory: () => Promise<{ default: React.ComponentType }>, _opts?: unknown) => {
@@ -62,11 +58,6 @@ import { DashboardWrapper } from './wrapper.client';
 // ---------------------------------------------------------------------------
 
 describe('DashboardWrapper', () => {
-  beforeEach(() => {
-    resolveDynamicImport = null;
-    dynamicPromise = null;
-  });
-
   it('renders without crashing', async () => {
     await act(async () => {
       render(

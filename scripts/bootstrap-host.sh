@@ -41,6 +41,7 @@ command -v apt-get >/dev/null 2>&1 || {
 
 log() { printf '\n\033[1;34m→ %s\033[0m\n' "$*"; }
 ok()  { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m✗ %s\033[0m\n' "$*"; exit 1; }
 
 install_docker() {
@@ -130,6 +131,9 @@ bring_up() {
   Then re-run:  ./scripts/bootstrap-host.sh $([ "$MODE" = small ] && echo --small)
 EOF
     exit 0
+  fi
+  if ! grep -Eq '^DATABASE_URL=.*@db(:|/)' .env; then
+    warn ".env: DATABASE_URL does not point at the compose database (host db); the app and migrate will not reach the in-compose Postgres. Use the DATABASE_URL from .env.deploy.example (or the COMPOSE / DEPLOYMENT ONLY block of .env.example) unless you use an external database."
   fi
   log "Bringing up the stack ($MODE)"
   # shellcheck disable=SC2046

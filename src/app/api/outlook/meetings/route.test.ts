@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
-vi.mock('@/lib/outlook/addin-auth', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/outlook/addin-auth')>()),
-  authenticateAddinRequest: vi.fn(),
+vi.mock('@/lib/outlook/addin-gate', () => ({ requireAddinUser: vi.fn() }));
+vi.mock('@/lib/teams/audit', () => ({
+  recordTeamsRegister: vi.fn().mockResolvedValue(undefined),
+  recordTeamsUnregister: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/lib/teams/meeting-resolver', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/teams/meeting-resolver')>()),
@@ -22,12 +23,16 @@ vi.mock('@/lib/teams/store', () => ({
 
 import { POST } from './route';
 import { DELETE } from './[id]/route';
-import { AddinAuthError, authenticateAddinRequest } from '@/lib/outlook/addin-auth';
+import { AddinAuthError } from '@/lib/outlook/addin-auth';
+import { requireAddinUser } from '@/lib/outlook/addin-gate';
+import { recordTeamsRegister, recordTeamsUnregister } from '@/lib/teams/audit';
 import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
 import { registerTeamsMeeting, unregisterTeamsMeeting } from '@/lib/teams/register';
 import { getTeamsMeeting, listTeamsMeetingsByGraphId } from '@/lib/teams/store';
 
-const mockAuth = vi.mocked(authenticateAddinRequest);
+const mockAuth = vi.mocked(requireAddinUser);
+const mockAuditRegister = vi.mocked(recordTeamsRegister);
+const mockAuditUnregister = vi.mocked(recordTeamsUnregister);
 const mockResolve = vi.mocked(resolveJoinUrl);
 const mockRegister = vi.mocked(registerTeamsMeeting);
 const mockUnregister = vi.mocked(unregisterTeamsMeeting);
@@ -125,7 +130,35 @@ describe('POST /api/outlook/meetings', () => {
       occurrenceEnd: null,
       origin: 'outlook',
       keepState: false,
+    }, expect.any(Object));
+  });
+
+  it('audits the arming as the dashboard does, with no subject, link or Graph id', async () => {
+    const body = await (await post({ joinUrl: JOIN })).json();
+
+    expect(mockAuditRegister).toHaveBeenCalledTimes(1);
+    expect(mockAuditRegister.mock.calls[0][1]).toEqual({
+      userId: 'user-1', meetingId: body.id, outcome: 'success', armed: true, isOrganizer: true, armResult: 'armed',
     });
+  });
+
+  it('audits a registration that failed after the arm step with what was known of it', async () => {
+    mockRegister.mockImplementationOnce(async (_u, _i, progress) => {
+      Object.assign(progress!, { isOrganizer: true, armResult: 'armed' });
+      throw new ResolveError('not_invited');
+    });
+
+    await post({ joinUrl: JOIN });
+
+    expect(mockAuditRegister.mock.calls[0][1]).toMatchObject({
+      outcome: 'error', code: 'resolve_not_invited', armed: true, isOrganizer: true, armResult: 'armed',
+    });
+  });
+
+  it('refuses a caller the access check turns away, with no audit event', async () => {
+    mockAuth.mockRejectedValueOnce(new AddinAuthError('forbidden'));
+    expect((await post({ joinUrl: JOIN })).status).toBe(403);
+    expect(mockAuditRegister).not.toHaveBeenCalled();
   });
 
   it('uses the appointment\'s own times, so a series occurrence gets its window', async () => {
@@ -205,6 +238,17 @@ describe('DELETE /api/outlook/meetings/[id]', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, disarmed: true });
     expect(mockGet).toHaveBeenCalledWith('user-1', 'ol-1');
+    expect(mockAuditUnregister.mock.calls[0][1]).toEqual({ userId: 'user-1', meetingId: 'ol-1', disarmed: true });
+  });
+
+  it('audits a disarm Teams refused with its closed code, and keeps the code out of the answer', async () => {
+    mockGet.mockResolvedValueOnce({ id: 'ol-1', origin: 'outlook' } as never);
+    mockUnregister.mockResolvedValueOnce({ disarmed: false, failureCode: 'http_503' });
+
+    const res = await del('ol-1');
+
+    expect(await res.json()).toEqual({ ok: true, disarmed: false });
+    expect(mockAuditUnregister.mock.calls[0][1]).toEqual({ userId: 'user-1', meetingId: 'ol-1', disarmed: false, code: 'http_503' });
   });
 
   it('leaves a meeting registered in the dashboard alone', async () => {

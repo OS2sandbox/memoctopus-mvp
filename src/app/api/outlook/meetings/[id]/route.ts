@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateAddinRequest } from '@/lib/outlook/addin-auth';
+import { requireAddinUser } from '@/lib/outlook/addin-gate';
 import { addinErrorResponse } from '@/lib/outlook/http';
+import { recordTeamsUnregister } from '@/lib/teams/audit';
 import { unregisterTeamsMeeting } from '@/lib/teams/register';
 import { getTeamsMeeting } from '@/lib/teams/store';
 
@@ -12,7 +13,7 @@ import { getTeamsMeeting } from '@/lib/teams/store';
  */
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const userId = await authenticateAddinRequest(req.headers);
+    const userId = await requireAddinUser(req.headers);
 
     const { id } = await params;
     const row = await getTeamsMeeting(userId, id);
@@ -23,8 +24,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       );
     }
 
-    const { disarmed } = await unregisterTeamsMeeting(userId, row);
+    const { disarmed, failureCode } = await unregisterTeamsMeeting(userId, row);
     console.log(`[outlook] ${userId} switched off ${id} (disarmed: ${disarmed})`);
+    // Disarming PATCHes the user's Teams meeting options back; `disarmed: false` says it could not be done.
+    await recordTeamsUnregister(req, { userId, meetingId: id, disarmed, ...(failureCode ? { code: failureCode } : {}) });
     return NextResponse.json({ ok: true, disarmed });
   } catch (err) {
     // Every answer carries a Danish `message` the pane shows as it is.

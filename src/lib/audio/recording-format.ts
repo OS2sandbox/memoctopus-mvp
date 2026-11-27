@@ -41,13 +41,3 @@ export function pickRecordingMimeType(
   }
   return '';
 }
-
-/**
- * Maps a recorder mime type to the file extension we save it under. iOS records
- * mp4/AAC which we store as `.m4a`; everything else is treated as webm.
- */
-export function extensionForMimeType(mimeType: string): string {
-  if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'm4a';
-  if (mimeType.includes('ogg')) return 'ogg';
-  return 'webm';
-}

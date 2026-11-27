@@ -1,0 +1,259 @@
+import { describe, expect, it } from 'vitest';
+import { EVENT_TYPES, type EventType } from './events';
+import { summariseEvent, type SummarisableEvent } from './summary.da';
+
+const NAME = 'Mette Eksempelsen';
+const ev = (eventType: string, over: Partial<SummarisableEvent> = {}): SummarisableEvent => ({
+  eventType,
+  outcome: 'success',
+  source: 'server',
+  actorUserId: 'u1',
+  actorName: NAME,
+  details: {},
+  ...over,
+});
+
+// One expectation per catalogue type: the table is typed over EventType, so a new type must be added here too.
+const CASES: Record<EventType, [SummarisableEvent, string]> = {
+  'auth.login': [ev('auth.login', { details: { method: 'password', provider: 'credential' } }), `${NAME} loggede ind med adgangskode`],
+  'auth.login_failed': [
+    ev('auth.login_failed', { outcome: 'error', actorUserId: null, actorName: null, details: { reason: 'rate_limited' } }),
+    'Mislykket login-forsøg (for mange forsøg)',
+  ],
+  'authz.denied': [ev('authz.denied', { outcome: 'denied', details: { required: 'audit.read', reason: 'missing_capability' } }), `${NAME} fik adgang nægtet til »Læse loggen«`],
+  'template.create': [ev('template.create'), `${NAME} oprettede en skabelon`],
+  'template.update': [ev('template.update', { details: { changedFields: ['prompt'], hasChangeNote: false } }), `${NAME} ændrede en skabelon`],
+  'template.delete': [ev('template.delete'), `${NAME} slettede en skabelon`],
+  'central_template.create': [ev('central_template.create', { templateName: 'Test af prompt', details: { version: 1, targetCount: 2, principalTargetCount: 1 } }), `${NAME} oprettede den centrale skabelon »Test af prompt«`],
+  'central_template.update': [ev('central_template.update', { templateName: 'X', details: { version: 3, changedFields: ['prompt'] } }), `${NAME} ændrede den centrale skabelon »X« (version 3)`],
+  'central_template.retarget': [ev('central_template.retarget', { templateName: 'X', details: { version: 4, targetCount: 1, principalTargetCount: 0 } }), `${NAME} ændrede, hvem der har den centrale skabelon »X« til rådighed (version 4)`],
+  'central_template.archive': [ev('central_template.archive', { templateName: 'X', details: { version: 5 } }), `${NAME} arkiverede den centrale skabelon »X«, så den er fjernet for alle (version 5)`],
+  'central_template.restore': [ev('central_template.restore', { templateName: 'X', details: { version: 6 } }), `${NAME} genoprettede den centrale skabelon »X« (version 6)`],
+  'audio.upload': [ev('audio.upload', { details: { channel: 'upload', bytes: 1000 } }), `${NAME} uploadede en lydfil til transskribering`],
+  'minutes.generate': [ev('minutes.generate', { details: { templateSource: 'personal', userInstruction: false, durationMs: 5, segmentCount: 2 } }), `${NAME} genererede et referat`],
+  'export.download': [ev('export.download', { details: { format: 'pdf' } }), `${NAME} hentede en eksport (pdf)`],
+  'teams.meeting_register': [
+    ev('teams.meeting_register', { details: { armed: true, isOrganizer: true, armResult: 'armed' } }),
+    `${NAME} tilmeldte et Teams-møde til automatisk referat og slog automatisk optagelse og transskription til i mødet`,
+  ],
+  'teams.meeting_unregister': [ev('teams.meeting_unregister', { details: { disarmed: true } }), `${NAME} afmeldte et Teams-møde`],
+  'teams.artifacts_fetch': [
+    ev('teams.artifacts_fetch', { source: 'system', details: { trigger: 'poller', result: 'ready', transcript: true, recording: true } }),
+    'Systemet hentede transskription og optagelse fra Teams',
+  ],
+  'teams.recording_delete': [
+    ev('teams.recording_delete', { source: 'system', details: { status: 'deleted' } }),
+    'Systemet slettede en Teams-optagelse fra OneDrive',
+  ],
+  'teams.stash_delete': [
+    ev('teams.stash_delete', { source: 'system', actorUserId: null, actorName: null, details: { trigger: 'ttl' } }),
+    'Systemet slettede serverens kopi af en Teams-transskription, som ingen havde hentet',
+  ],
+  'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde med transskription, referatversioner og lyd`],
+  'meeting.transcript_delete': [ev('meeting.transcript_delete', { source: 'client' }), `${NAME} slettede transskriptionens tekst fra et møde`],
+  'meeting.audio_delete': [ev('meeting.audio_delete', { source: 'client' }), `${NAME} slettede lyden fra et møde`],
+  'meeting.minutes_view': [ev('meeting.minutes_view', { source: 'client' }), `${NAME} åbnede et referat`],
+  'meeting.transcript_view': [ev('meeting.transcript_view', { source: 'client' }), `${NAME} åbnede en transskription`],
+  'meeting.audio_play': [ev('meeting.audio_play', { source: 'client' }), `${NAME} afspillede lyden fra et møde`],
+  'meeting.recording_start': [ev('meeting.recording_start', { source: 'client' }), `${NAME} startede en optagelse`],
+  'meeting.recording_pause': [ev('meeting.recording_pause', { source: 'client' }), `${NAME} satte en optagelse på pause`],
+  'meeting.recording_resume': [ev('meeting.recording_resume', { source: 'client' }), `${NAME} genoptog en optagelse`],
+  'meeting.recording_stop': [ev('meeting.recording_stop', { source: 'client' }), `${NAME} stoppede en optagelse`],
+  'meeting.transcript_edit': [ev('meeting.transcript_edit', { source: 'client' }), `${NAME} redigerede en transskription`],
+  'meeting.metadata_edit': [ev('meeting.metadata_edit', { source: 'client', details: { field: 'title' } }), `${NAME} ændrede titlen på et møde`],
+  'meeting.minutes_save': [ev('meeting.minutes_save', { source: 'client' }), `${NAME} redigerede et referat`],
+  'meeting.minutes_version': [
+    ev('meeting.minutes_version', { source: 'client', details: { versionNumber: 2, action: 'snapshot' } }),
+    `${NAME} gemte en ny version af referatet (version 2)`,
+  ],
+  'meeting.minutes_version_prune': [
+    ev('meeting.minutes_version_prune', { source: 'client', details: { prunedCount: 1 } }),
+    'Appen fjernede de ældste referatversioner fra et møde, fordi grænsen for antal versioner var nået (1 version)',
+  ],
+  'system.config_changed': [
+    ev('system.config_changed', { source: 'system', actorUserId: null, actorName: null, details: { fingerprint: '0123456789abcdef', changed: true } }),
+    'Systemets konfiguration er ændret siden sidste start',
+  ],
+  'integration.sync_run': [
+    ev('integration.sync_run', { source: 'system', actorUserId: null, actorName: null, details: { kind: 'org_sync', trigger: 'cron', status: 'success', usersUpserted: 4 } }),
+    'Systemet opdaterede brugere og organisation fra Rollekatalog',
+  ],
+  'audit.export': [ev('audit.export', { details: { rowCount: 1200, format: 'csv' } }), `${NAME} eksporterede loggen (1.200 rækker)`],
+  'audit.events_dropped': [
+    ev('audit.events_dropped', { source: 'system', details: { reason: 'daily_cap', count: 12 } }),
+    '12 hændelser blev ikke registreret (dagsgrænsen for en bruger var nået)',
+  ],
+  'audit.prune': [ev('audit.prune', { source: 'system', actorUserId: null, actorName: null, details: { deletedCount: 1, olderThanDays: 365 } }), 'Systemet slettede 1 logpost ældre end 365 dage'],
+};
+
+describe('summariseEvent', () => {
+  it.each(EVENT_TYPES)('has a sentence for %s', (type) => {
+    const [event, expected] = CASES[type];
+    expect(summariseEvent(event)).toBe(expected);
+  });
+
+  it('covers exactly the catalogue', () => {
+    expect(Object.keys(CASES).sort()).toEqual([...EVENT_TYPES].sort());
+  });
+
+  it('says how a person logged in, SAML included', () => {
+    const login = (method: string) => summariseEvent(ev('auth.login', { details: { method, provider: 'kommune' } }));
+    expect(login('saml')).toBe(`${NAME} loggede ind via single sign-on (SAML)`);
+    expect(login('oidc')).toBe(`${NAME} loggede ind via single sign-on`);
+    expect(login('microsoft')).toBe(`${NAME} loggede ind med Microsoft`);
+  });
+
+  it('names an unknown actor and the system', () => {
+    expect(summariseEvent(ev('auth.login', { actorName: null }))).toBe('Ukendt bruger loggede ind');
+    expect(summariseEvent(ev('auth.login', { actorName: '  ', actorUserId: null, source: 'system' }))).toBe('Systemet loggede ind');
+    expect(summariseEvent(ev('audit.prune', { actorName: null, actorUserId: null, source: 'system', details: { deletedCount: 3, olderThanDays: 30 } }))).toBe(
+      'Systemet slettede 3 logposter ældre end 30 dage',
+    );
+  });
+
+  it('handles a central template without a known name or version', () => {
+    expect(summariseEvent(ev('central_template.update', { details: {} }))).toBe(`${NAME} ændrede en central skabelon`);
+    expect(summariseEvent(ev('central_template.create', { templateName: null }))).toBe(`${NAME} oprettede en central skabelon`);
+  });
+
+  it('shows a failed minutes generation or export as failed', () => {
+    expect(summariseEvent(ev('minutes.generate', { outcome: 'error', details: {} }))).toBe(`${NAME} kunne ikke generere et referat`);
+    expect(summariseEvent(ev('export.download', { outcome: 'error', details: { format: 'docx' } }))).toBe(`${NAME} kunne ikke hente en eksport (docx)`);
+  });
+
+  it('mentions the central template of generated minutes', () => {
+    expect(summariseEvent(ev('minutes.generate', { details: { templateSource: 'central', templateVersion: 2 } }))).toBe(
+      `${NAME} genererede et referat med en central skabelon (version 2)`,
+    );
+  });
+
+  it('does not name a template for non-central events, even if one is passed', () => {
+    expect(summariseEvent(ev('template.update', { templateName: 'Hemmeligt navn' }))).not.toContain('Hemmeligt');
+  });
+
+  it('shows a truncated export and singular counts', () => {
+    expect(summariseEvent(ev('audit.export', { details: { rowCount: 1, format: 'csv', truncated: true } }))).toBe(`${NAME} eksporterede loggen (1 række, afkortet)`);
+  });
+
+  it('never repeats free text or unknown values from details', () => {
+    const s = summariseEvent(ev('authz.denied', { details: { required: 'EVIL<script>', reason: 'x' } }));
+    expect(s).toBe(`${NAME} fik adgang nægtet`);
+    expect(summariseEvent(ev('auth.login_failed', { details: { reason: 'free text here' } }))).toBe('Mislykket login-forsøg');
+  });
+
+  it('says when the app deleted something on its own, and when a version was restored', () => {
+    expect(summariseEvent(ev('meeting.audio_delete', { source: 'client', details: { trigger: 'auto_generate' } }))).toBe(
+      `${NAME} slettede lyden fra et møde (automatisk efter referatet blev genereret)`,
+    );
+    expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'auto_pagehide' } }))).toBe(
+      `${NAME} slettede et møde med transskription, referatversioner og lyd (automatisk, da fanen blev lukket)`,
+    );
+    expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'user' } }))).not.toContain('automatisk');
+    expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 2, action: 'restore' } }))).toBe(
+      `${NAME} gendannede version 2 af referatet`,
+    );
+    // A browser-reported action that failed says so (a local write or the microphone failed).
+    expect(summariseEvent(ev('meeting.recording_start', { source: 'client', outcome: 'error' }))).toBe(
+      `${NAME} startede en optagelse (handlingen mislykkedes)`,
+    );
+  });
+
+  it('mentions an extra instruction without ever quoting it, and a burst of failed logins', () => {
+    expect(summariseEvent(ev('minutes.generate', { details: { templateSource: 'none', userInstruction: true } }))).toBe(
+      `${NAME} genererede et referat og en ekstra instruktion`,
+    );
+    expect(
+      summariseEvent(ev('auth.login_failed', { outcome: 'error', actorUserId: null, actorName: null, details: { reason: 'burst_summary', droppedCount: 140 } })),
+    ).toBe('140 yderligere mislykkede login-forsøg fra samme adresse blev ikke registreret enkeltvis');
+  });
+
+  it('falls back to the stored label for a legacy type', () => {
+    expect(summariseEvent(ev('legacy.thing'))).toBe(`${NAME}: Ukendt hændelsestype (legacy.thing)`);
+  });
+
+  it('words each audio channel by what was sent and what for', () => {
+    const s = (channel: string, outcome = 'success') => summariseEvent(ev('audio.upload', { outcome, details: { channel, bytes: 5 } }));
+    expect(s('live')).toBe(`${NAME} uploadede lyd fra en live optagelse til transskribering`);
+    expect(s('batch')).toBe(`${NAME} uploadede en optagelse til transskribering`);
+    expect(s('upload', 'error')).toBe(`${NAME} kunne ikke uploade en lydfil til transskribering`);
+  });
+
+  it('words each metadata field, with a count for participants and speakers', () => {
+    const s = (details: Record<string, unknown>) => summariseEvent(ev('meeting.metadata_edit', { source: 'client', details }));
+    expect(s({ field: 'recorded_at' })).toBe(`${NAME} ændrede datoen for et møde`);
+    expect(s({ field: 'participants', count: 3 })).toBe(`${NAME} ændrede deltagerne på et møde (3 deltagere)`);
+    expect(s({ field: 'speakers', count: 1 })).toBe(`${NAME} ændrede talerne på et møde (1 taler)`);
+    expect(s({ field: 'speakers' })).toBe(`${NAME} ændrede talerne på et møde`);
+  });
+
+  it('words minutes_version actions, and a row with a removed action falls back to a generic sentence', () => {
+    const s = (action: string) => summariseEvent(ev('meeting.minutes_version', { source: 'client', details: { versionNumber: 2, action } }));
+    expect(s('restore')).toBe(`${NAME} gendannede version 2 af referatet`);
+    expect(s('generate')).toBe(`${NAME} genererede en ny version af referatet (version 2)`);
+    expect(s('activate')).toBe(`${NAME} ændrede en version af et referat (version 2)`);
+  });
+
+  it('words the Teams events by trigger, result and what the arm PATCH came to', () => {
+    const sys = { source: 'system', actorUserId: null, actorName: null };
+    expect(summariseEvent(ev('teams.stash_delete', { source: 'server', details: { trigger: 'handoff' } }))).toBe(
+      'Serveren slettede sin kopi af en Teams-transskription, efter at den var hentet',
+    );
+    expect(summariseEvent(ev('teams.artifacts_fetch', { source: 'server', details: { trigger: 'manual', result: 'ready', transcript: true, recording: false } }))).toBe(
+      `${NAME} hentede transskription fra Teams`,
+    );
+    expect(summariseEvent(ev('teams.artifacts_fetch', { ...sys, outcome: 'error', details: { trigger: 'poller', result: 'failed', transcript: false, recording: false, code: 'http_502' } }))).toBe(
+      'Systemet kunne ikke hente transskription fra Teams',
+    );
+    expect(summariseEvent(ev('teams.meeting_register', { details: { armed: false, isOrganizer: false, armResult: 'not_organizer' } }))).toBe(
+      `${NAME} tilmeldte et Teams-møde til automatisk referat som deltager (mødets indstillinger er ikke ændret)`,
+    );
+    expect(summariseEvent(ev('teams.meeting_register', { outcome: 'error', details: { code: 'forbidden' } }))).toBe(
+      `${NAME} kunne ikke tilmelde et Teams-møde til automatisk referat`,
+    );
+    expect(summariseEvent(ev('teams.meeting_unregister', { outcome: 'error', details: { disarmed: false, code: 'unavailable' } }))).toBe(
+      `${NAME} afmeldte et Teams-møde, men mødets indstillinger i Teams kunne ikke føres tilbage`,
+    );
+    expect(summariseEvent(ev('teams.recording_delete', { ...sys, details: { status: 'recycled' } }))).toContain('papirkurven');
+    expect(summariseEvent(ev('teams.recording_delete', { ...sys, details: { status: 'not_found' } }))).toContain('slettede intet');
+  });
+});
+
+describe('summariseEvent: integration.sync_run and failed Teams deletions', () => {
+  const run = (details: Record<string, unknown>, over: Partial<SummarisableEvent> = {}) =>
+    summariseEvent(ev('integration.sync_run', { source: 'system', actorUserId: null, actorName: null, details, ...over }));
+
+  it('names the administrator for a manual run and says when a guard stopped or the run failed', () => {
+    expect(run({ kind: 'role_catalogue', trigger: 'manual', status: 'success' }, { source: 'server', actorUserId: 'u1', actorName: NAME })).toBe(
+      `${NAME} opdaterede rolle- og gruppekataloget fra Rollekatalog`,
+    );
+    expect(run({ kind: 'org_sync', trigger: 'cron', status: 'aborted', code: 'removal_threshold' }, { outcome: 'error' })).toBe(
+      'Systemet forsøgte at opdatere brugere og organisation fra Rollekatalog, men en sikkerhedsgrænse stoppede kørslen',
+    );
+    expect(run({ kind: 'org_sync', trigger: 'cron', status: 'error', code: 'timeout' }, { outcome: 'error' })).toBe(
+      'Systemet forsøgte at opdatere brugere og organisation fra Rollekatalog, men kørslen fejlede',
+    );
+  });
+
+  it('a failed deletion of the server-held Teams transcript, or of the recording in OneDrive, says so', () => {
+    expect(summariseEvent(ev('teams.stash_delete', { source: 'system', outcome: 'error', details: { trigger: 'ttl' } }))).toBe(
+      'Serveren kunne ikke slette sin kopi af en Teams-transskription',
+    );
+    expect(summariseEvent(ev('teams.recording_delete', { source: 'system', outcome: 'error', details: { status: 'failed' } }))).toBe(
+      'Systemet kunne ikke slette en Teams-optagelse fra OneDrive',
+    );
+  });
+});
+
+describe('summariseEvent: refused central template writes', () => {
+  const denied = (reason: string) => summariseEvent(ev('authz.denied', { outcome: 'denied', details: { required: 'template.manage', reason } }));
+
+  it('says what was refused, by closed reason', () => {
+    expect(denied('out_of_scope')).toBe(`${NAME} fik afvist en ændring af en central skabelon uden for sit område`);
+    expect(denied('version_conflict')).toContain('ændret af en anden');
+    expect(denied('principal_targets_need_claims')).toContain('rollerne ikke kommer fra login');
+  });
+
+  it('falls back to the capability sentence for any other reason', () => {
+    expect(denied('missing_capability')).toMatch(/^Mette Eksempelsen fik adgang nægtet/);
+  });
+});

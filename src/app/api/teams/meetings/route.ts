@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
 import { parseGraphDate } from '@/lib/teams/graph-dates';
+import { recordTeamsRegister } from '@/lib/teams/audit';
+import { teamsFailureCode } from '@/lib/teams/failure-code';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
+import { isArmed } from '@/lib/teams/meeting-arm';
 import { isSafeMeetingId } from '@/lib/teams/meeting-id';
-import { MeetingIdTakenError, registerTeamsMeeting } from '@/lib/teams/register';
+import { MeetingIdTakenError, registerTeamsMeeting, type RegisterProgress } from '@/lib/teams/register';
 import { isDeferred, listTeamsMeetings } from '@/lib/teams/store';
 
 function str(value: unknown): string | undefined {
@@ -26,8 +28,9 @@ function str(value: unknown): string | undefined {
  * `deferred` says the meeting is waiting for its user to open it.
  */
 export async function GET() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const rows = await listTeamsMeetings(session.user.id);
   return NextResponse.json({
@@ -54,8 +57,9 @@ export async function GET() {
  * poller works from.
  */
 export async function POST(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   // Before anything is written: resolving the link needs Graph, which the sign-in
   // never got scopes for, and the owner binding below would be left dangling.
@@ -92,6 +96,9 @@ export async function POST(req: NextRequest) {
   const occurrenceStart = parseGraphDate(str(body.scheduledStart));
   const occurrenceEnd = parseGraphDate(str(body.scheduledEnd));
 
+  // What is known of the arm step, for the audit event of a failure that comes after it.
+  const progress: RegisterProgress = {};
+
   try {
     const { row, armResult } = await registerTeamsMeeting(userId, {
       meetingId,
@@ -99,6 +106,16 @@ export async function POST(req: NextRequest) {
       eventId,
       occurrenceStart,
       occurrenceEnd,
+    }, progress);
+
+    // Arming PATCHed the user's Teams meeting options on their behalf: worth a trace.
+    await recordTeamsRegister(req, {
+      userId,
+      meetingId,
+      outcome: 'success',
+      armed: row.armed,
+      isOrganizer: row.isOrganizer,
+      armResult,
     });
 
     return NextResponse.json({
@@ -116,6 +133,15 @@ export async function POST(req: NextRequest) {
     if (err instanceof MeetingIdTakenError) {
       return NextResponse.json({ error: 'meeting-id-taken' }, { status: 409 });
     }
+    await recordTeamsRegister(req, {
+      userId,
+      meetingId,
+      outcome: 'error',
+      code: teamsFailureCode(err),
+      // The meeting may be armed in Teams although saving the row failed afterwards.
+      ...(progress.armResult !== undefined ? { armed: isArmed(progress.armResult), armResult: progress.armResult } : {}),
+      ...(progress.isOrganizer !== undefined ? { isOrganizer: progress.isOrganizer } : {}),
+    });
     return teamsErrorResponse(err);
   }
 }

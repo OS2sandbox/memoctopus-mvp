@@ -272,6 +272,17 @@ describe('processTeamsMeeting — recording + transcript', () => {
     expect(mockStorePendingMeta).toHaveBeenCalled();
   });
 
+  it('logs failures without the error message, which can echo transcript text', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribeAlongCues.mockRejectedValue(new Error('SECRET transcript text'));
+    await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    mockDownloadRecording.mockRejectedValue(new Error('SECRET transcript text'));
+    await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(spy).toHaveBeenCalled();
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('SECRET');
+  });
+
   it('marks the run in flight so a concurrent poll does not start a second download', async () => {
     await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(mockStorePendingTranscript).toHaveBeenCalledWith('meet-1', { status: 'processing' });
@@ -282,7 +293,8 @@ describe('processTeamsMeeting — recording + transcript', () => {
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
-    expect(outcome).toEqual({ status: 'failed', reason: 'netværket forsvandt' });
+    // `code` is the closed audit code, never the message.
+    expect(outcome).toEqual({ status: 'failed', reason: 'netværket forsvandt', code: 'unknown' });
     expect(mockRm).toHaveBeenCalledWith(SCRATCH, { recursive: true, force: true });
     expect(mockStorePendingTranscript).toHaveBeenLastCalledWith('meet-1', { status: 'failed' });
   });
@@ -337,7 +349,7 @@ describe('processTeamsMeeting — transcript only', () => {
     });
     expect(mockDownloadRecording).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
-    // The audio route needs a meta record or the client polls 404 forever — and
+    // The pending-meta route needs a record or the client polls 404 forever — and
     // it carries the VTT speaker names, which pre-fill participants in Gennemgang.
     expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
@@ -467,7 +479,7 @@ describe('processTeamsMeeting — transcript only', () => {
     mockDownloadVtt.mockResolvedValue('WEBVTT\n\n');
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
-    expect(outcome).toEqual({ status: 'failed', reason: 'Transskriptionen fra Teams var tom.' });
+    expect(outcome).toEqual({ status: 'failed', reason: 'Transskriptionen fra Teams var tom.', code: 'unknown' });
     expect(mockStorePendingTranscript).toHaveBeenLastCalledWith('meet-1', { status: 'failed' });
   });
 });
@@ -505,7 +517,7 @@ describe('processTeamsMeeting — recording only', () => {
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
-    expect(outcome).toEqual({ status: 'failed', reason: 'Optagelsen fra Teams indeholdt ingen tale.' });
+    expect(outcome).toEqual({ status: 'failed', reason: 'Optagelsen fra Teams indeholdt ingen tale.', code: 'unknown' });
     expect(mockStorePendingTranscript).toHaveBeenLastCalledWith('meet-1', { status: 'failed' });
     expect(mockStorePendingMeta).not.toHaveBeenCalled();
   });
@@ -909,6 +921,7 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({
       status: 'failed',
       reason: 'ingen adgang',
+      code: 'forbidden',
     });
   });
 

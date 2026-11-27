@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { withHandler } from '@/lib/api-handler';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { db } from '@/lib/db';
 import { sharedSkabeloner } from '@/lib/db/schema';
 import { getSkabelon } from '@/lib/skabeloner/server';
@@ -10,9 +10,10 @@ import { ensureSharedSkabelonerTable } from '@/lib/skabeloner/shared-table';
 type Ctx = { params: Promise<{ id: string }> };
 
 // Publish a Skabelon to the shared (public) table and return an import token.
-export async function POST(_req: NextRequest, { params }: Ctx) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export const POST = withHandler('skabeloner/[id]/share POST', async (_req: NextRequest, { params }: Ctx) => {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
   if (!getShareConfig().link) {
     return NextResponse.json({ error: 'Linkdeling er deaktiveret' }, { status: 403 });
   }
@@ -36,4 +37,4 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
   });
 
   return NextResponse.json({ token }, { status: 201 });
-}
+});

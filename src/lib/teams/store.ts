@@ -1,6 +1,7 @@
 import { pool } from '@/lib/db';
 import { realDate } from '@/lib/teams/graph-dates';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { UUID_RE } from '@/lib/ids';
 import type { ResolvedMeetingOptions } from '@/lib/teams/meeting-resolver';
 
 /**
@@ -676,7 +677,8 @@ export async function listPendingRecordingCleanups(userId: string): Promise<Team
 /**
  * Settles a pending cleanup. Only a row still `pending` is written, so of two runs
  * racing on the same recording the first verdict stands — the second finds the
- * file gone and would otherwise overwrite `deleted` with `not_found`.
+ * file gone and would otherwise overwrite `deleted` with `not_found`. Returns whether
+ * this call settled the row, so only the run that did writes the audit event.
  *
  * A row the user has switched off was only kept for this delete, so it goes now.
  */
@@ -684,11 +686,12 @@ export async function settleRecordingCleanup(
   userId: string,
   id: string,
   result: Exclude<RecordingCleanupState, 'pending'>,
-): Promise<void> {
-  await queryUserSchema(
+): Promise<boolean> {
+  const rows = await queryUserSchema<{ id: string }>(
     userId,
     `UPDATE teams_meetings SET recording_cleanup = $2, updated_at = NOW()
-      WHERE id = $1 AND recording_cleanup = 'pending'`,
+      WHERE id = $1 AND recording_cleanup = 'pending'
+      RETURNING id`,
     [id, result],
   );
   await queryUserSchema(
@@ -697,6 +700,7 @@ export async function settleRecordingCleanup(
       WHERE id = $1 AND unregistered_at IS NOT NULL AND recording_cleanup IS DISTINCT FROM 'pending'`,
     [id],
   );
+  return rows.length > 0;
 }
 
 /**
@@ -717,8 +721,6 @@ export async function deleteTeamsMeeting(userId: string, id: string): Promise<vo
 }
 
 // ─── Cross-user discovery ───────────────────────────────────────────────────
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Inverse of `getUserSchemaName()`: `u_<userId with - replaced by _>`.

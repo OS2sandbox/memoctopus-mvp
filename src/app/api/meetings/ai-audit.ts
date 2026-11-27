@@ -1,0 +1,104 @@
+// Shared by the minutes and export routes (the only AI/export routes that are audited):
+// emits their audit events without ever letting the audit write (or a bad id) affect
+// the user's request. Metadata only: the helpers here never see transcript text,
+// titles or error messages.
+import type { AuditEventOf, EventType } from '@/lib/audit/events';
+import { noteDroppedEvents } from '@/lib/audit/dropped';
+import { recordServerEvent } from '@/lib/audit/record';
+import type { HeaderSource } from '@/lib/audit/request-context';
+import { describeError } from '@/lib/audit/safe-log';
+import { createThrottle } from '@/lib/audit/throttle';
+
+export const elapsedMs = (t0: number): number => Math.max(0, Date.now() - t0);
+
+const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ABORT_ERR', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+const NETWORK_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_SOCKET',
+]);
+
+/**
+ * A short code describing why an AI/STT call failed, from a CLOSED set: `http_<status>`
+ * (numeric 100-599), `timeout`, `network` or `unknown`. It is derived from the error's
+ * numeric status, code and class name only, and never forwards a string the upstream
+ * error carries (an upstream server or a proxy can choose `code` and the message, and
+ * those can echo prompt or transcript text).
+ */
+export function outcomeCodeOf(err: unknown): 'timeout' | 'network' | 'unknown' | `http_${number}` {
+  const { name, status, code } = describeError(err);
+  if (status !== undefined) return `http_${status}`;
+  if ((code && TIMEOUT_CODES.has(code)) || /Timeout|^AbortError$/.test(name)) return 'timeout';
+  if ((code && NETWORK_CODES.has(code)) || /^APIConnectionError$|^FetchError$/.test(name)) return 'network';
+  return 'unknown';
+}
+
+/**
+ * The minutes/export routes' name for recordServerEvent, which is best-effort and never throws.
+ * Server-emitted events have no volume guard of their own: the route's own work (an LLM call, an
+ * export) is far slower than any limit would be. A refusal BEFORE that work is the exception: it
+ * costs nothing, so it goes through a throttle (emitTemplateDenied below).
+ */
+export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): ReturnType<typeof recordServerEvent> {
+  return recordServerEvent(req, event);
+}
+
+// ─── refused central template ────────────────────────────────────────────────
+
+/**
+ * A refused central generation returns before any LLM call, so nothing slows a loop of them down.
+ * The log keeps the first rows per person and window; the excess is counted and reported as an
+ * audit.events_dropped row (reason rate_limit), so a flood is never silent and never unbounded.
+ */
+const templateDeniedThrottle = createThrottle({
+  limit: 10,
+  windowMs: 60_000,
+  maxKeys: 5_000,
+  now: () => Date.now(),
+  onSummary: (actorUserId, dropped) => noteDroppedEvents(actorUserId, 'rate_limit', dropped),
+});
+
+/** minutes.generate with outcome denied (template_unavailable), capped per person and minute and counted beyond that. */
+export function emitTemplateDenied(req: HeaderSource, event: AuditEventOf<'minutes.generate'>): void | ReturnType<typeof recordServerEvent> {
+  if (!event.actorUserId || !templateDeniedThrottle.allow(event.actorUserId)) return;
+  return emitAudit(req, event);
+}
+
+// ─── live audio ──────────────────────────────────────────────────────────────
+
+/** One utterance is sent every few seconds while recording; the log gets one row per person and meeting per window. */
+const liveAudioThrottle = createThrottle({ limit: 1, windowMs: 5 * 60_000, maxKeys: 5_000, now: () => Date.now() });
+
+/**
+ * audio.upload for the live recording path (channel 'live'), at most once per (person, meeting,
+ * outcome) per 5 minutes: a long recording sends hundreds of utterances and a row for each would
+ * bury the log. The row carries the size of THAT utterance. By design this is coalescing, not a
+ * loss, so the skipped ones are not reported as dropped (no onSummary). Bounded: the oldest key is evicted.
+ */
+export function emitLiveAudioUpload(
+  req: HeaderSource,
+  event: { actorUserId: string; entityId: string | undefined; outcome: 'success' | 'error'; bytes: number; durationMs: number; outcomeCode?: string },
+): void {
+  const key = `${event.actorUserId}|${event.entityId ?? '-'}|${event.outcome}`;
+  if (!liveAudioThrottle.allow(key)) return;
+  void emitAudit(req, {
+    type: 'audio.upload',
+    actorUserId: event.actorUserId,
+    outcome: event.outcome,
+    entityId: event.entityId,
+    details: {
+      channel: 'live',
+      bytes: event.bytes,
+      durationMs: event.durationMs,
+      ...(event.outcomeCode ? { outcomeCode: event.outcomeCode } : {}),
+    },
+  });
+}
+
+/** Test only. */
+export function __resetLiveAudio(): void {
+  liveAudioThrottle.reset();
+}
+
+/** Test only. */
+export function __resetTemplateDenied(): void {
+  templateDeniedThrottle.reset();
+}
